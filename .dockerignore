@@ -1,0 +1,6 @@
+*
+!requirements.txt
+!bot/
+!bot/**
+bot/__pycache__/
+bot/**/*.pyc

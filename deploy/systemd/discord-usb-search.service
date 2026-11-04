@@ -1,0 +1,24 @@
+[Unit]
+Description=Discord USB public search service
+PartOf=discord-usb-bot.service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+WorkingDirectory=/opt/discord-companion-usb
+EnvironmentFile=-/etc/discord-companion-usb-search.env
+Environment=PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 MCP_LOOPBACK_ONLY=1 DDG_CACHE_TTL=0 DDG_REF_URL_THRESHOLD=0
+ExecStart=/opt/discord-companion-usb/venv/bin/python -m mcp_web.server
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

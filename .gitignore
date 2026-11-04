@@ -1,0 +1,35 @@
+# Credentials and local tool settings
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+.aws/
+.agents/
+.codex/
+
+# Runtime data, private history, backups, and logs
+data/
+backups/
+logs/
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.log
+
+# Python local artifacts
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Editor and operating-system files
+.DS_Store
+.idea/
+.vscode/

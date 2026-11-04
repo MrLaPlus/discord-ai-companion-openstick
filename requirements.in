@@ -1,0 +1,4 @@
+discord.py>=2.6,<3
+aiohttp>=3.12,<4
+python-dotenv>=1.1,<2
+mcp==2.3.0

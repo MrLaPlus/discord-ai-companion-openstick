@@ -1,0 +1,25 @@
+# Corrections, private feedback, time-window catch-up and actual provider quotas
+
+2026-10-28. Deployment evidence is in PROGRESS.md.
+
+**Corrections:** “หมายถึง…”, “ที่หมายถึงคือ…” or “I meant …” combines the latest correction with the original question in the same requester/channel/privacy scope. A reply selects the matching retained answer turn. Missing/expired/opt-out context asks for the full question rather than borrowing another person's history. Uses existing bounded RAM only, not permanent memory. Fresh access/source checks remain. Corrections of web-dependent scores/news/prices/URLs require public-query review starting blank; no automatic history-derived outgoing query. Disabled web lookup is reported honestly.
+
+**Feedback:** owner-only five-minute “ตอบมั่ว / ยาวไป / ไม่ฮา” buttons create genuinely ephemeral acknowledgements, not public message updates. Store only answer ID, guild/channel/requester, category, timestamp and private flag. No copied question, answer or free-text report. One category per answer, replaceable on another click. Opt-out blocks storage. `/feedback` or the panel feedback page requires fresh Manage Server permission and source-channel view/history access. Public answers get jump links; private answers show categories only. No automatic admin DM or model/personality training. Foreign-key deletion follows the answer/user erasure and normal answer retention; the retained privacy ledger applies during recovery.
+
+**Catch-up:** natural “ตั้งแต่เมื่อคืนพลาดอะไรบ้าง” starts at18:00 the previous day; today starts at00:00. Explicit HH:MM, ISO dates, previous month/year and1–168-hour requests are supported; no interval defaults to the last24hours. State the actual start/end dates and configured timezone. `/catchup hours:6` remains private. Summarize topics, explicit decisions and unresolved items from the bounded authorized sample, never invent assignees/deadlines/agreements or mix in unrelated memories/dialogue. Sources remain hidden until requested. More preserves the original summary interval privately. Existing channel ingestion/share/audience rules remain; no claim to read every message.
+
+**Quota steering:** no repeated internal “wait N seconds” messages. Admission pauses <=25s retry only the not-yet-started AI operation once, with fresh ACL, privacy, source, tone and tool authorization. Never repeat MCP/history side effects. Existing90s job deadline remains; interjections do not wait. Pending work reserves tokens; completed provider-reported usage releases token overestimates, while unknown usage retains the reservation. Monetary reservations remain conservative and configurable. Provider limits are neither increased nor bypassed.
+
+The quota panel/status/alerts now expose only allowlisted headers from the last actual Groq response: requests = RPD, tokens = TPM, with limit/remaining/reset and a checked timestamp. Missing RPM/TPD or unsupported-provider metrics remain unknown, never inferred from local counters or the public plan table. Organization usage may be shared with other applications. Old snapshots are not presented as live remaining capacity. Only actualHTTP429 reports provider quota exhaustion. Local controls stay internal; an unserviceable local job uses a neutral capacity message, not a fabricated provider quota/countdown. Admin-defined monetary budgets remain separate configuration.
+
+Primary reference: [Groq rate-limit header semantics](https://console.groq.com/docs/rate-limits).
+
+**Scope:** meaning-based memory search was explicitly cancelled: no semantic/vector index, embedding model or `/memory search`. Existing lexical/history search remains. No image, voice, Docker service or dependency additions. SQLite remains schema2 with one additive feedback table. Keep the pre-update image/database backup and CURRENT privacy-ledger.sqlite3; never restore an older journal over current erasures. Synthetic/model/command probes do not imply a real user's button acceptance test.
+
+
+### Compact answer controls / ปุ่มใต้คำตอบ (2026-10-28)
+
+Latest owner preference supersedes earlier always-visible feedback/source-selector UI: new answers show only ค้นเว็บเพิ่ม 🌐 / หาเพิ่ม / เจาะเรื่องนี้ / ดูที่มา (subject to tool permissions). Source selection is shown only when the bot explicitly asks to disambiguate before searching. Feedback buttons are removed; existing stored feedback/admin reports remain. Old Discord messages are not bulk-edited. / คำตอบใหม่เหลือเฉพาะสี่ปุ่มบน เมนูเลือกแหล่งค้นขึ้นเฉพาะคำถามก่อนค้น ปุ่มประเมินถูกนำออก ไม่มีการแก้ข้อความเก่าย้อนหลังทั้งห้อง
+
+
+2026-10-28 search controls fix: the four buttons are owner-only and expire after5minutes or a consumed/stopped request. Stale/restart buttons now receive a private expiry response; they do not reconstruct lost history. Ask again for new controls. Active More/Sources/modal submission defer privately before bounded12s access/source checks. Newly opened query forms get an expiry response after restart; older already-open unprefixed forms must be reopened. / แก้ปุ่มเก่าไม่ตอบสนอง ให้แจ้งหมดอายุแบบส่วนตัว ปุ่มค้นต่อใช้ชุดจากคำตอบใหม่ ไม่กู้บริบทส่วนตัวที่หายไปหลังรีสตาร์ต

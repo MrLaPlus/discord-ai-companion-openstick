@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Discord AI Companion — สถาปัตยกรรม / Architecture</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&amp;family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;family=Noto+Sans+Thai:wght@400;500;600&amp;display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; }
+    :root {
+      --paper: #f5f5f5; --ink: #2d3142; --muted: #4f5d75;
+      --soft: #5a6580; --accent: #bf4520; --link: #2e5aa8;
+      --rule: rgba(45,49,66,.12);
+      --sans: 'Geist', 'Noto Sans Thai', system-ui, sans-serif;
+      --serif: 'Instrument Serif', 'Noto Sans Thai', serif;
+      --mono: 'Geist Mono', ui-monospace, monospace;
+    }
+    body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--sans); }
+    main { width: 100%; max-width: 1408px; min-width: 0; margin: auto; padding: 40px 32px; }
+    .eyebrow { color: var(--muted); font: 500 10px var(--mono); letter-spacing: .16em; }
+    h1 { font: 400 40px/1.15 var(--serif); margin: 12px 0; }
+    .intro { max-width: 860px; color: var(--muted); font-size: 15px; line-height: 1.8; }
+    .diagram-container { width: 100%; overflow-x: auto; margin: 24px 0; }
+    svg { display: block; width: 100%; min-width: 1280px; }
+    svg text { fill: var(--ink); font-family: var(--sans); }
+    .name { font-size: 12px; font-weight: 600; }
+    .th { font-size: 12px; }
+    .sub { font: 400 9px var(--mono); fill: var(--soft); }
+    .tag { font: 500 8px var(--mono); fill: var(--soft); letter-spacing: .12em; }
+    .edge-label { font: 400 8px var(--mono); fill: var(--muted); letter-spacing: .06em; }
+    .wire { fill: none; stroke: var(--muted); stroke-width: 1.5; marker-end: var(--arrow); }
+    .api { stroke: var(--link); marker-end: var(--arrow-link); }
+    .passive { stroke-dasharray: 5 4; }
+    .zone { fill: rgba(45,49,66,.02); stroke: #5a6580; stroke-dasharray: 5 4; }
+    .badge { fill: #ffffff; stroke: #bfc0c0; stroke-width: .8; }
+    .box { fill: #ffffff; stroke: var(--ink); stroke-width: 1; }
+    .external { fill: rgba(45,49,66,.03); stroke: var(--link); stroke-dasharray: 5 4; }
+    .focal { fill: rgba(191,69,32,.08); stroke: var(--accent); }
+    .store { fill: rgba(45,49,66,.05); stroke: var(--muted); }
+    .notes { display: grid; grid-template-columns: 1.2fr 1fr; gap: 32px; border-top: 1px solid var(--rule); padding-top: 20px; }
+    h2 { font-size: 20px; font-weight: 600; margin: 0 0 8px; }
+    .notes p, .details { font-size: 13px; line-height: 1.9; }
+    .en { display: block; color: var(--muted); }
+    .details { border-top: 1px solid var(--rule); margin-top: 24px; padding-top: 20px; }
+    .details p { margin: 8px 0; }
+    code { font-family: var(--mono); font-size: .9em; }
+    a { color: var(--link); text-underline-offset: 3px; }
+    .figure-section { margin-top: 40px; }
+    .section-head { border-top: 1px solid var(--rule); padding-top: 24px; }
+    .section-head p, .caption { font-size: 13px; color: var(--muted); line-height: 1.85; max-width: 960px; }
+    nav { display: flex; gap: 12px 24px; flex-wrap: wrap; font-size: 13px; margin: 24px 0; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; line-height: 1.8; }
+    th, td { padding: 12px 16px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--rule); }
+    th { font-weight: 600; background: rgba(45,49,66,.03); }
+    .table-scroll { overflow-x: auto; width: 100%; }
+    .snapshot { display: inline-block; border: 1px solid var(--rule); border-radius: 4px; padding: 8px 12px; font-size: 12px; line-height: 1.7; }
+    :focus-visible { outline: 2px solid var(--link); outline-offset: 4px; }
+    footer { margin-top: 24px; color: var(--muted); font-size: 11px; line-height: 1.8; }
+    @media (max-width: 700px) { main { padding: 24px 16px; } h1 { font-size: 32px; } .notes { grid-template-columns: 1fr; gap: 16px; } }
+    @media print { nav { display: none; } .figure-section { break-inside: avoid; } .diagram-container { overflow-x: visible; } svg { min-width: 0; } main { padding: 12px; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <p class="eyebrow">ARCHITECTURE · IMPLEMENTED SYSTEM · 28 OCT 2026</p>
+    <h1>Discord AI Companion</h1>
+    <p class="intro">คุยเป็นเพื่อน ค้นข้อมูลตามสิทธิ์ และควบคุมได้จาก Discord<br>
+      <span lang="en">A conversational companion with permission-scoped lookup and controls inside Discord.</span></p>
+    <p class="snapshot">อิงรุ่นที่เปิดใช้แล้ว <code>ca1cbf5</code> · หลักฐาน <code>33f6ac3</code><br><span class="en" lang="en">Implementation snapshot, not a live status dashboard.</span></p>
+    <nav aria-label="สารบัญ / Contents"><a href="#runtime">01 โครงสร้าง / Runtime</a><a href="#request">02 ถามตอบ / Request path</a><a href="#controls">03 ควบคุม / Controls</a><a href="#data">04 ข้อมูล / Data</a></nav>
+  </header>
+  <!-- Two plain Architecture views at doc-wide 1280×720, eight nodes each.
+       Network topology and application responsibilities are separated; neither view
+       claims to be a sequence diagram or an exhaustive policy-evaluation trace. -->
+  <section id="runtime" class="figure-section">
+    <div class="section-head"><p class="eyebrow">01 / RUNTIME TOPOLOGY</p><h2>สี่บริการ แยกหน้าที่ชัดเจน</h2><p lang="en">Four services, separate responsibilities. Arrows show requests and access; response paths are omitted here.</p></div>
+    <div class="diagram-container" tabindex="0" role="region" aria-label="Runtime / โครงสร้างการรัน · เลื่อนแนวนอน / Scroll horizontally">
+    <svg id="architecture-runtime" viewBox="0 0 1280 720" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="architecture-runtime-title architecture-runtime-desc" style="--arrow:url(#architecture-runtime-arrow);--arrow-link:url(#architecture-runtime-arrow-link)">
+      <title id="architecture-runtime-title">Runtime / โครงสร้างการรัน</title>
+      <desc id="architecture-runtime-desc">Four isolated Docker services connect Discord and Groq with scoped data storage and public read-only tools; the browser reaches the public internet through an IP-validating proxy.</desc>
+      <defs><marker id="architecture-runtime-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#4f5d75"/></marker><marker id="architecture-runtime-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#bf4520"/></marker><marker id="architecture-runtime-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#2e5aa8"/></marker></defs>
+      <rect width="1280" height="720" fill="#f5f5f5"/>
+      <rect x="280" y="64" width="720" height="592" rx="8" class="zone"/>
+      <rect x="304" y="52" width="284" height="24" fill="#f5f5f5"/>
+      <text x="312" y="68" class="tag">DOCKER COMPOSE · 4 SERVICES · NO HOST PORTS</text>
+      <path data-edge-id="ingress" data-from="members" data-to="bot" class="wire api" d="M240 172 H312"/><path data-edge-id="model-call" data-from="bot" data-to="model" class="wire api" d="M552 152 H928 Q936 152 936 160 V164 Q936 172 944 172 H1040"/><path data-edge-id="state-rw" data-from="bot" data-to="state" class="wire " d="M432 232 V320"/><path data-edge-id="mcp-call" data-from="bot" data-to="mcp" class="wire api" d="M552 192 H720 Q728 192 728 200 V320"/><path data-edge-id="browser-call" data-from="mcp" data-to="browser" class="wire api passive" d="M608 380 H584 Q576 380 576 388 V480 Q576 488 568 488 H440 Q432 488 432 496 V520"/><path data-edge-id="caption-proxy" data-from="mcp" data-to="proxy" class="wire api" d="M728 440 V520"/><path data-edge-id="proxy-only" data-from="browser" data-to="proxy" class="wire api" d="M552 580 H608"/><path data-edge-id="egress" data-from="proxy" data-to="public" class="wire api" d="M848 580 H1040"/><path data-edge-id="direct-public" data-from="mcp" data-to="public" class="wire api" d="M848 380 H1132 Q1140 380 1140 388 V520"/>
+      <g data-label="GROQ HTTPS" aria-hidden="true"><rect x="684" y="124" width="136" height="20" fill="#f5f5f5"/><text x="752" y="137" text-anchor="middle" class="edge-label">GROQ HTTPS</text></g><g data-label="READ / WRITE" aria-hidden="true"><rect x="440" y="264" width="112" height="20" fill="#f5f5f5"/><text x="496" y="277" text-anchor="middle" class="edge-label">READ / WRITE</text></g><g data-label="MCP REQUEST" aria-hidden="true"><rect x="736" y="252" width="112" height="20" fill="#f5f5f5"/><text x="792" y="265" text-anchor="middle" class="edge-label">MCP REQUEST</text></g><g data-label="READ PAGE" aria-hidden="true"><rect x="448" y="460" width="112" height="20" fill="#f5f5f5"/><text x="504" y="473" text-anchor="middle" class="edge-label">READ PAGE</text></g><g data-label="CAPTIONS" aria-hidden="true"><rect x="736" y="460" width="112" height="20" fill="#f5f5f5"/><text x="792" y="473" text-anchor="middle" class="edge-label">CAPTIONS</text></g><g data-label="PROXY" aria-hidden="true"><rect x="556" y="552" width="48" height="20" fill="#f5f5f5"/><text x="580" y="565" text-anchor="middle" class="edge-label">PROXY</text></g><g data-label="PUBLIC ONLY" aria-hidden="true"><rect x="880" y="552" width="128" height="20" fill="#f5f5f5"/><text x="944" y="565" text-anchor="middle" class="edge-label">PUBLIC ONLY</text></g><g data-label="FETCH / FEEDS" aria-hidden="true"><rect x="872" y="352" width="136" height="20" fill="#f5f5f5"/><text x="940" y="365" text-anchor="middle" class="edge-label">FETCH / FEEDS</text></g>
+      <g data-node-id="members" data-bounds="40,112,200,120">
+      <rect x="40" y="112" width="200" height="120" rx="6" fill="#f5f5f5"/>
+      <rect x="40" y="112" width="200" height="120" rx="6" class="box external"/>
+      <rect x="56" y="124" width="60" height="16" rx="2" class="badge"/>
+      <text x="64" y="135" class="tag">DISCORD</text>
+      <text x="56" y="160" class="name">Members / สมาชิก</text>
+      <text x="56" y="184" class="th">แท็ก · ตอบกลับ · ห้องบอท</text>
+      <text x="56" y="204" class="th">คำถามและปุ่มตั้งค่า</text>
+      <text x="56" y="220" class="sub">/ask /panel /stop</text>
+    </g><g data-node-id="bot" data-bounds="312,112,240,120">
+      <rect x="312" y="112" width="240" height="120" rx="6" fill="#f5f5f5"/>
+      <rect x="312" y="112" width="240" height="120" rx="6" class="box focal"/>
+      <rect x="328" y="124" width="76" height="16" rx="2" class="badge"/>
+      <text x="336" y="135" class="tag">SERVICE 01</text>
+      <text x="328" y="160" class="name">Discord companion</text>
+      <text x="328" y="184" class="th">คิว · สิทธิ์ · บุคลิก · ปุ่มควบคุม</text>
+      <text x="328" y="204" class="th">เก็บคีย์และเชื่อม volume เฉพาะตัวนี้</text>
+      <text x="328" y="220" class="sub">bot · Python / discord.py</text>
+    </g><g data-node-id="model" data-bounds="1040,112,200,120">
+      <rect x="1040" y="112" width="200" height="120" rx="6" fill="#f5f5f5"/>
+      <rect x="1040" y="112" width="200" height="120" rx="6" class="box external"/>
+      <rect x="1056" y="124" width="64" height="16" rx="2" class="badge"/>
+      <text x="1064" y="135" class="tag">GROQ API</text>
+      <text x="1056" y="160" class="name">AI conversation</text>
+      <text x="1056" y="184" class="th">โมเดลคุยและสรุปผล</text>
+      <text x="1056" y="204" class="th">ใช้บริบทที่ผ่านการตรวจ</text>
+      <text x="1056" y="220" class="sub">qwen/qwen3.8-27b</text>
+    </g><g data-node-id="state" data-bounds="312,320,240,120">
+      <rect x="312" y="320" width="240" height="120" rx="6" fill="#f5f5f5"/>
+      <rect x="312" y="320" width="240" height="120" rx="6" class="box store"/>
+      <rect x="328" y="332" width="108" height="16" rx="2" class="badge"/>
+      <text x="336" y="343" class="tag">BOT-DATA VOLUME</text>
+      <text x="328" y="368" class="name">Persistent state</text>
+      <text x="328" y="392" class="th">ประวัติ · ความจำ · ตั้งค่า · โควตา</text>
+      <text x="328" y="412" class="th">ฐานหลัก + บันทึกการลบ + backup</text>
+      <text x="328" y="428" class="sub">SQLite · privacy-ledger.sqlite3</text>
+    </g><g data-node-id="mcp" data-bounds="608,320,240,120">
+      <rect x="608" y="320" width="240" height="120" rx="6" fill="#f5f5f5"/>
+      <rect x="608" y="320" width="240" height="120" rx="6" class="box box"/>
+      <rect x="624" y="332" width="76" height="16" rx="2" class="badge"/>
+      <text x="632" y="343" class="tag">SERVICE 02</text>
+      <text x="624" y="368" class="name">MCP web tools</text>
+      <text x="624" y="392" class="th">ค้นเว็บ · RSS · ซับ YouTube</text>
+      <text x="624" y="412" class="th">ตรวจชื่อและ schema 6 เครื่องมือ</text>
+      <text x="624" y="428" class="sub">mcp-web · Streamable HTTP</text>
+    </g><g data-node-id="browser" data-bounds="312,520,240,120">
+      <rect x="312" y="520" width="240" height="120" rx="6" fill="#f5f5f5"/>
+      <rect x="312" y="520" width="240" height="120" rx="6" class="box box"/>
+      <rect x="328" y="532" width="76" height="16" rx="2" class="badge"/>
+      <text x="336" y="543" class="tag">SERVICE 03</text>
+      <text x="328" y="568" class="name">Read-only browser</text>
+      <text x="328" y="592" class="th">Playwright อ่าน DOM หลังรัน JS</text>
+      <text x="328" y="612" class="th">ไม่มีคีย์ · volume · ทางออกตรง</text>
+      <text x="328" y="628" class="sub">mcp-browser · internal only</text>
+    </g><g data-node-id="proxy" data-bounds="608,520,240,120">
+      <rect x="608" y="520" width="240" height="120" rx="6" fill="#f5f5f5"/>
+      <rect x="608" y="520" width="240" height="120" rx="6" class="box box"/>
+      <rect x="624" y="532" width="76" height="16" rx="2" class="badge"/>
+      <text x="632" y="543" class="tag">SERVICE 04</text>
+      <text x="624" y="568" class="name">HTTPS proxy</text>
+      <text x="624" y="592" class="th">ตรวจ DNS และ public IP จริง</text>
+      <text x="624" y="612" class="th">เบราว์เซอร์ออกเว็บผ่านตัวนี้</text>
+      <text x="624" y="628" class="sub">web-proxy · CONNECT 443</text>
+    </g><g data-node-id="public" data-bounds="1040,520,200,120">
+      <rect x="1040" y="520" width="200" height="120" rx="6" fill="#f5f5f5"/>
+      <rect x="1040" y="520" width="200" height="120" rx="6" class="box external"/>
+      <rect x="1056" y="532" width="88" height="16" rx="2" class="badge"/>
+      <text x="1064" y="543" class="tag">PUBLIC HTTPS</text>
+      <text x="1056" y="568" class="name">Public sources</text>
+      <text x="1056" y="592" class="th">เว็บ · RSS · ซับ YouTube</text>
+      <text x="1056" y="612" class="th">อาจอ่านไม่ได้หรือไม่มีซับ</text>
+      <text x="1056" y="628" class="sub">bounded / untrusted</text>
+    </g>
+      <g class="legend" aria-hidden="true">
+        <line x1="40" y1="680" x2="1240" y2="680" stroke="#bfc0c0"/>
+        <rect x="40" y="696" width="12" height="12" rx="2" fill="rgba(191,69,32,.08)" stroke="#bf4520"/>
+        <text x="64" y="706" class="sub">FOCUS: BOT ORCHESTRATION</text>
+        <line x1="400" y1="702" x2="432" y2="702" stroke="#4f5d75"/><text x="444" y="706" class="sub">INTERNAL</text>
+        <line x1="600" y1="702" x2="632" y2="702" stroke="#2e5aa8"/><text x="644" y="706" class="sub">API / EXTERNAL</text>
+        <line x1="880" y1="702" x2="912" y2="702" stroke="#4f5d75" stroke-dasharray="5 4"/><text x="924" y="706" class="sub">OPTIONAL / RETURN; DASHED CARD = EXTERNAL</text>
+      </g>
+    </svg></div>
+    <p class="caption">เฉพาะ <code>bot</code> มีคีย์และ volume ข้อมูล ส่วน MCP ไม่มีคีย์ Discord/Groq หรือฐานแชท เบราว์เซอร์อยู่ในเครือข่ายภายในและออก HTTPS ผ่าน proxy เท่านั้น<br><span lang="en">Only the bot holds credentials and the data volume. MCP services have neither chat storage nor bot credentials; the browser has proxy-only HTTPS egress.</span></p>
+  </section>
+  <section id="request" class="figure-section">
+    <div class="section-head"><p class="eyebrow">02 / APPLICATION RESPONSIBILITIES</p><h2>ตรวจสิทธิ์ก่อนทำ และก่อนส่ง</h2><p lang="en">Check access before work and before delivery. Source follow-ups bypass generation; emergency controls bypass the AI queue.</p></div>
+    <div class="diagram-container" tabindex="0" role="region" aria-label="Request path / เส้นทางถามตอบ · เลื่อนแนวนอน / Scroll horizontally">
+    <svg id="architecture-request" viewBox="0 0 1280 720" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="architecture-request-title architecture-request-desc" style="--arrow:url(#architecture-request-arrow);--arrow-link:url(#architecture-request-arrow-link)">
+      <title id="architecture-request-title">Request path / เส้นทางถามตอบ</title>
+      <desc id="architecture-request-desc">Fresh host-side controls route questions through scoped context and durable quotas to Groq, or cancel matching work immediately; every reply part rechecks access and hides unrequested provenance.</desc>
+      <defs><marker id="architecture-request-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#4f5d75"/></marker><marker id="architecture-request-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#bf4520"/></marker><marker id="architecture-request-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#2e5aa8"/></marker></defs>
+      <rect width="1280" height="720" fill="#f5f5f5"/>
+      <rect x="280" y="64" width="720" height="592" rx="8" class="zone"/>
+      <rect x="304" y="52" width="312" height="24" fill="#f5f5f5"/>
+      <text x="312" y="68" class="tag">BOT PROCESS · CONTROL PATH BYPASSES THE AI QUEUE</text>
+      <path data-edge-id="request-ingress" data-from="question" data-to="gate" class="wire api" d="M240 172 H264 Q272 172 272 164 V160 Q272 152 280 152 H312"/><path data-edge-id="allowed-context" data-from="gate" data-to="context" class="wire " d="M552 172 H608"/><path data-edge-id="read-settings" data-from="gate" data-to="memory" class="wire " d="M432 232 V320"/><path data-edge-id="state-context" data-from="memory" data-to="context" class="wire " d="M552 380 H576 Q584 380 584 372 V272 Q584 264 592 264 H720 Q728 264 728 256 V232"/><path data-edge-id="cancel-now" data-from="gate" data-to="cancel" class="wire passive" d="M312 192 H280 Q272 192 272 200 V572 Q272 580 280 580 H312"/><path data-edge-id="generate" data-from="context" data-to="generation" class="wire api" d="M848 172 H1040"/><path data-edge-id="answer-return" data-from="generation" data-to="delivery" class="wire api passive" d="M1140 232 V480 Q1140 488 1132 488 H736 Q728 488 728 496 V520"/><path data-edge-id="send" data-from="delivery" data-to="reply" class="wire api" d="M848 580 H1040"/>
+      <g data-label="ALLOW" aria-hidden="true"><rect x="556" y="144" width="48" height="20" fill="#f5f5f5"/><text x="580" y="157" text-anchor="middle" class="edge-label">ALLOW</text></g><g data-label="SETTINGS" aria-hidden="true"><rect x="440" y="264" width="112" height="20" fill="#f5f5f5"/><text x="496" y="277" text-anchor="middle" class="edge-label">SETTINGS</text></g><g data-label="CONTEXT" aria-hidden="true"><rect x="624" y="236" width="80" height="20" fill="#f5f5f5"/><text x="664" y="249" text-anchor="middle" class="edge-label">CONTEXT</text></g><g data-label="STOP / PAUSE" aria-hidden="true"><rect x="168" y="400" width="96" height="20" fill="#f5f5f5"/><text x="216" y="413" text-anchor="middle" class="edge-label">STOP / PAUSE</text></g><g data-label="SCOPED INPUT" aria-hidden="true"><rect x="884" y="144" width="120" height="20" fill="#f5f5f5"/><text x="944" y="157" text-anchor="middle" class="edge-label">SCOPED INPUT</text></g><g data-label="ANSWER" aria-hidden="true"><rect x="1152" y="352" width="88" height="20" fill="#f5f5f5"/><text x="1196" y="365" text-anchor="middle" class="edge-label">ANSWER</text></g><g data-label="REPLY PARTS" aria-hidden="true"><rect x="880" y="552" width="128" height="20" fill="#f5f5f5"/><text x="944" y="565" text-anchor="middle" class="edge-label">REPLY PARTS</text></g>
+      <g data-node-id="question" data-bounds="40,112,200,120">
+      <rect x="40" y="112" width="200" height="120" rx="6" fill="#f5f5f5"/>
+      <rect x="40" y="112" width="200" height="120" rx="6" class="box external"/>
+      <rect x="56" y="124" width="48" height="16" rx="2" class="badge"/>
+      <text x="64" y="135" class="tag">INPUT</text>
+      <text x="56" y="160" class="name">Ask / configure</text>
+      <text x="56" y="184" class="th">คำถาม · เลือกแหล่งค้น · ตั้งค่า</text>
+      <text x="56" y="204" class="th">ปุ่มเป็นของผู้ถามและหมดอายุ</text>
+      <text x="56" y="220" class="sub">mentions / buttons / slash</text>
+    </g><g data-node-id="gate" data-bounds="312,112,240,120">
+      <rect x="312" y="112" width="240" height="120" rx="6" fill="#f5f5f5"/>
+      <rect x="312" y="112" width="240" height="120" rx="6" class="box focal"/>
+      <rect x="328" y="124" width="96" height="16" rx="2" class="badge"/>
+      <text x="336" y="135" class="tag">HOST-ENFORCED</text>
+      <text x="328" y="160" class="name">Access &amp; controls</text>
+      <text x="328" y="184" class="th">ตรวจคน ห้อง บทบาท และการพัก</text>
+      <text x="328" y="204" class="th">ตั้งค่าส่วนตัว / แอดมินแยกสิทธิ์</text>
+      <text x="328" y="220" class="sub">/panel · ACL · revision</text>
+    </g><g data-node-id="context" data-bounds="608,112,240,120">
+      <rect x="608" y="112" width="240" height="120" rx="6" fill="#f5f5f5"/>
+      <rect x="608" y="112" width="240" height="120" rx="6" class="box box"/>
+      <rect x="624" y="124" width="96" height="16" rx="2" class="badge"/>
+      <text x="632" y="135" class="tag">ORCHESTRATION</text>
+      <text x="624" y="160" class="name">Queue &amp; context</text>
+      <text x="624" y="184" class="th">เว็บ / ประวัติดิส / ทั้งคู่</text>
+      <text x="624" y="204" class="th">คิวจำกัด · งบก่อนเรียก AI/เครื่องมือ</text>
+      <text x="624" y="220" class="sub">history.py · web_tools.py</text>
+    </g><g data-node-id="generation" data-bounds="1040,112,200,120">
+      <rect x="1040" y="112" width="200" height="120" rx="6" fill="#f5f5f5"/>
+      <rect x="1040" y="112" width="200" height="120" rx="6" class="box external"/>
+      <rect x="1056" y="124" width="84" height="16" rx="2" class="badge"/>
+      <text x="1064" y="135" class="tag">EXTERNAL AI</text>
+      <text x="1056" y="160" class="name">Generate answer</text>
+      <text x="1056" y="184" class="th">โทน 0–4 · ความยาวตามคำถาม</text>
+      <text x="1056" y="204" class="th">ข้อมูลอ้างอิงไม่ใช่คำสั่ง</text>
+      <text x="1056" y="220" class="sub">provider.py · quota.py</text>
+    </g><g data-node-id="memory" data-bounds="312,320,240,120">
+      <rect x="312" y="320" width="240" height="120" rx="6" fill="#f5f5f5"/>
+      <rect x="312" y="320" width="240" height="120" rx="6" class="box store"/>
+      <rect x="328" y="332" width="88" height="16" rx="2" class="badge"/>
+      <text x="336" y="343" class="tag">SCOPED STATE</text>
+      <text x="328" y="368" class="name">Memory &amp; preferences</text>
+      <text x="328" y="392" class="th">ต่อเรื่องชั่วคราว · มุกที่ยินยอม</text>
+      <text x="328" y="412" class="th">จำถาวรเมื่อยืนยัน · เคารพ opt-out</text>
+      <text x="328" y="428" class="sub">RAM / SQLite / deletion ledger</text>
+    </g><g data-node-id="cancel" data-bounds="312,520,240,120">
+      <rect x="312" y="520" width="240" height="120" rx="6" fill="#f5f5f5"/>
+      <rect x="312" y="520" width="240" height="120" rx="6" class="box box"/>
+      <rect x="328" y="532" width="120" height="16" rx="2" class="badge"/>
+      <text x="336" y="543" class="tag">IMMEDIATE CONTROL</text>
+      <text x="328" y="568" class="name">Stop / หยุดงาน</text>
+      <text x="328" y="592" class="th">ยกเลิกคิวและงานในขอบเขต</text>
+      <text x="328" y="612" class="th">เปิดกลับไม่เล่นคำถามเก่าซ้ำ</text>
+      <text x="328" y="628" class="sub">/stop · room / server</text>
+    </g><g data-node-id="delivery" data-bounds="608,520,240,120">
+      <rect x="608" y="520" width="240" height="120" rx="6" fill="#f5f5f5"/>
+      <rect x="608" y="520" width="240" height="120" rx="6" class="box focal"/>
+      <rect x="624" y="532" width="84" height="16" rx="2" class="badge"/>
+      <text x="632" y="543" class="tag">FRESH CHECK</text>
+      <text x="624" y="568" class="name">Recheck &amp; deliver</text>
+      <text x="624" y="592" class="th">ตรวจสิทธิ์ โทน และเครื่องมืออีกครั้ง</text>
+      <text x="624" y="612" class="th">ซ่อนที่มา · แบ่งส่งข้อความยาว</text>
+      <text x="624" y="628" class="sub">per-part ACL · 1900 UTF-16</text>
+    </g><g data-node-id="reply" data-bounds="1040,520,200,120">
+      <rect x="1040" y="520" width="200" height="120" rx="6" fill="#f5f5f5"/>
+      <rect x="1040" y="520" width="200" height="120" rx="6" class="box external"/>
+      <rect x="1056" y="532" width="100" height="16" rx="2" class="badge"/>
+      <text x="1064" y="543" class="tag">DISCORD OUTPUT</text>
+      <text x="1056" y="568" class="name">Channel / private</text>
+      <text x="1056" y="592" class="th">ตอบห้องหรือให้ผู้ถามคนเดียว</text>
+      <text x="1056" y="612" class="th">ปุ่มค้นและ /ask ตอบส่วนตัว</text>
+      <text x="1056" y="628" class="sub">sources only on request</text>
+    </g>
+      <g class="legend" aria-hidden="true">
+        <line x1="40" y1="680" x2="1240" y2="680" stroke="#bfc0c0"/>
+        <rect x="40" y="696" width="12" height="12" rx="2" fill="rgba(191,69,32,.08)" stroke="#bf4520"/>
+        <text x="64" y="706" class="sub">FOCUS: ACCESS / DELIVERY</text>
+        <line x1="400" y1="702" x2="432" y2="702" stroke="#4f5d75"/><text x="444" y="706" class="sub">INTERNAL</text>
+        <line x1="600" y1="702" x2="632" y2="702" stroke="#2e5aa8"/><text x="644" y="706" class="sub">API / EXTERNAL</text>
+        <line x1="880" y1="702" x2="912" y2="702" stroke="#4f5d75" stroke-dasharray="5 4"/><text x="924" y="706" class="sub">OPTIONAL / RETURN; DASHED CARD = EXTERNAL</text>
+      </g>
+    </svg></div>
+    <div class="notes">
+      <div><h2>เลือกแหล่งค้น / Pick the source</h2><p>คำถามกำกวมให้เลือกเว็บ ประวัติ หรือทั้งคู่ ปุ่มตอบให้ผู้ถามคนเดียวและหมดอายุ 5 นาที ถ้าเลือกทั้งคู่ต้องตรวจคำค้นสาธารณะก่อน ประวัติในดิสไม่ถูกส่งไปเป็นคำค้นเว็บเอง<span class="en" lang="en">Ambiguous requests offer web, history or both. Owner-bound buttons return private answers and expire after five minutes. Combined lookup confirms a public query separately; history is never automatically exported as a web query.</span></p></div>
+      <div><h2>ที่มาเมื่อขอ / Sources on request</h2><p>ปกติซ่อนที่มา กดดูที่มาหรือถาม “เอามาจากไหน” เพื่ออ่านแหล่งของคำตอบนั้นและตรวจสิทธิ์ใหม่ โดยไม่เรียก AI อีก ข้อความยาวแบ่งส่งตามขนาด Discord<span class="en" lang="en">Provenance is hidden until requested. Source buttons target their own answer, revalidate access and use no extra generation. Long replies split into Discord-sized parts.</span></p></div>
+    </div>
+  </section>
+  <section id="controls" class="details">
+    <p class="eyebrow">03 / DISCORD CONTROL SURFACE</p><h2>ตั้งค่าได้โดยไม่ต้องมีเว็บแอดมิน / Controls without a web admin</h2>
+    <div class="table-scroll"><table><thead><tr><th>ส่วน / Area</th><th>สิ่งที่ทำได้ / Behavior</th><th>ขอบเขต / Boundary</th></tr></thead><tbody>
+      <tr><td><code>/panel</code></td><td>โทน ความยาว ห้อง เครื่องมือ ข่าว และสถานะ<span class="en" lang="en">Tone, length, rooms, tools, news and health.</span></td><td>ผู้ใช้แก้ค่าตัวเอง แอดมิน Manage Server แก้ค่าระบบ ตรวจสิทธิ์ใหม่ทุกครั้ง<span class="en" lang="en">Personal preferences or fresh admin authorization; five-minute controls.</span></td></tr>
+      <tr><td>บุคลิก / Conversation</td><td>โทน 0–4 รวมโหมดเรื้อน ตอบสั้นหรือยาวตามงาน พูด “พอ” เพื่อหยุดแซว 30 นาที<span class="en" lang="en">Adaptive length, tone 0–4 and temporary gentle mode.</span></td><td>ใช้ระดับต่ำกว่าระหว่างคนกับห้อง การแทรกคุยยังปิดจนเปิดรายห้อง<span class="en" lang="en">Personal and room caps apply; interjections are opt-in.</span></td></tr>
+      <tr><td><code>/joke</code></td><td>เสนอมุกประจำห้อง เจ้าตัวยินยอมและแอดมินอนุมัติ ลบได้ อายุ 30 วัน<span class="en" lang="en">Subject consent plus admin approval; removable jokes expire after 30 days.</span></td><td>ไม่ใช่ข้อเท็จจริงส่วนตัว เก็บได้ 20 มุกต่อห้อง<span class="en" lang="en">Optional references, not verified personal facts; 20 per room.</span></td></tr>
+      <tr><td>ค้นต่อ / Follow-up</td><td>หาเพิ่ม เจาะคำค้น เทียบไม่เกิน 3 ลิงก์ และตั้ง RSS ประจำห้อง<span class="en" lang="en">Continue, refine, compare up to three links and choose a room feed.</span></td><td>เว็บตัด URL ซ้ำแบบ best effort ประวัติใช้ cursor ตามสิทธิ์ ไม่ส่งข่าวเอง<span class="en" lang="en">Best-effort public deduplication, scoped history cursors; no automatic news posts.</span></td></tr>
+      <tr><td>สิทธิ์และงบ / Policy &amp; budget</td><td>เปิดเครื่องมือรายห้อง กำหนดบทบาท และจองโควตาก่อนเรียก<span class="en" lang="en">Room/tool role policies and durable pre-call reservations.</span></td><td>ค่าปิดมีผลเหนือเปิด ยอดเงินเป็นประมาณการจากราคาที่แอดมินตั้ง<span class="en" lang="en">Deny wins. Monetary estimates require a manually configured price.</span></td></tr>
+      <tr><td><code>/stop</code></td><td>หยุดห้องหรือเซิร์ฟเวอร์ ระบายคิวและยกเลิกงานในขอบเขต<span class="en" lang="en">Stop a room or guild, drain matching jobs and cancel active processing.</span></td><td>ไม่เล่นงานเก่าซ้ำเมื่อเปิดกลับ งานที่ถึงผู้ให้บริการแล้วอาจมีค่าใช้จ่าย<span class="en" lang="en">No replay on resume; already accepted external requests may incur charges.</span></td></tr>
+    </tbody></table></div>
+  </section>
+  <section id="data" class="details">
+    <p class="eyebrow">04 / DATA LIFETIME &amp; RECOVERY</p><h2>แยกสิ่งที่จำชั่วคราว ออกจากสิ่งที่เก็บถาวร</h2>
+    <div class="notes">
+      <div><h2>ในหน่วยความจำ / RAM only</h2><p>คำถามและคำตอบล่าสุด รวมที่มาเว็บและสถานะค้นต่อ อยู่ในขอบเขตคน/ห้อง/ส่วนตัวและหมดอายุเริ่มต้น 30 นาที ฉากสนทนาสำหรับแทรกคุยใช้เพียง 30 วินาที ไม่เก็บข้อความคำตอบ AI ลงฐาน<span class="en" lang="en">Recent dialogue, public references and follow-up state are scoped by user, channel and privacy mode with a 30-minute default lifetime. Interjection scenes live for 30 seconds. Generated answers are not stored in SQLite.</span></p></div>
+      <div><h2>บน volume / Persistent data</h2><p>SQLite เก็บประวัติที่อนุญาต ความจำที่ยืนยัน ตั้งค่า มุกที่อนุมัติ โควตาและรหัสที่มา มี backup ตามรอบ บันทึกการลบ <code>privacy-ledger.sqlite3</code> แยกจาก backup หมุนเวียนและต้องรักษาไว้<span class="en" lang="en">SQLite holds eligible history, confirmed memories, approved jokes, settings, quotas and source IDs. Keep the separate deletion journal alongside recovery assets; do not replace it with an older copy.</span></p></div>
+    </div>
+    <p>“อย่าจำฉัน” หรือ <code>/privacy</code> ปิดเก็บใหม่และลบข้อมูลที่บอทเก็บ ไม่ลบข้อความต้นฉบับใน Discord การกู้คืนใช้บันทึกการลบปัจจุบันเพื่อกันข้อมูลกลับมา ทดสอบกู้คืนสัปดาห์ละครั้งในพื้นที่ชั่วคราว หรือสั่งจากหน้าสถานะได้
+      <span class="en" lang="en">Opt-out erases the bot’s retained personal data, not original Discord messages. Recovery reapplies the current deletion journal. Weekly or manual recovery drills use disposable copies and never replace the live database.</span></p>
+    <p>ห้องข้อความที่บอทเห็นและส่งได้เรียกคุยด้วยแท็ก/ตอบกลับได้ ห้องบอทไม่ต้องแท็ก การคุยในห้องใหม่ไม่เปิดเก็บประวัติหรือแชร์ข้ามห้องเอง การแชร์ในห้องยังต้องพิสูจน์ว่าผู้รับทุกคนอ่านต้นทางได้ ส่วน <code>/ask</code> ตรวจสิทธิ์ผู้ถามและบอท
+      <span class="en" lang="en">Visible/sendable text rooms support mentions and replies; designated bot rooms allow untagged chat. New rooms do not automatically enable history storage or cross-room sharing. Public delivery requires an audience proof; private /ask checks requester and bot access.</span></p>
+  </section>
+  <section class="details" aria-label="ขอบเขตและหลักฐาน / Scope and evidence">
+    <p><strong>สิ่งที่เปิดใช้ / Implemented:</strong> เครื่องมืออ่านอย่างเดียว 6 ตัว: DuckDuckGo search, fetch, RSS/Atom, RSS news, YouTube captions และ Playwright DOM reader ไม่มีเครื่องมือจัดการเซิร์ฟเวอร์ดิส<span class="en" lang="en">Six reviewed read-only tools. The Playwright service is a narrow purpose-built MCP reader, not a general browser automation toolbox.</span></p>
+    <p><strong>ขอบเขตการป้องกัน / Limits:</strong> อ่านข้อมูลได้แบบจำกัดจำนวน บางเว็บหรือคลิปอ่านไม่ได้ และตัวกรองบุคลิก/ข้อมูลส่วนตัวเป็น heuristic เบราว์เซอร์ใช้ <code>--no-sandbox</code> ร่วมกับ container/network/request isolation ไม่ใช่คำรับรองความปลอดภัยของทุกเว็บ<span class="en" lang="en">Bounded retrieval, external availability limits and heuristic classifiers remain. Chromium uses --no-sandbox with container, network and request controls; no universal website safety is claimed.</span></p>
+    <p><strong>สถานะตาม snapshot / Evidence:</strong> Docker 4 ตัว healthy, 192 unit tests + 2 HTTP tests และทดสอบกู้คืนผ่าน ตรวจคำสั่งจริงและ MCP discovery หลังเปิดใช้แล้ว<span class="en" lang="en">Recorded rollout evidence: four healthy services, 192 unit plus two HTTP tests, recovery smoke and actual command/MCP discovery checks. This document does not run live checks.</span></p>
+    <p><strong>นอกขอบเขต / Excluded:</strong> อ่านรูป/แคปหน้าจอ, voice, GUI และ Discord admin/write MCP<span class="en" lang="en">Incoming image understanding, voice, GUI and Discord administration/write tools are excluded.</span></p>
+  </section>
+  <footer>
+    Source / อ้างอิง: <code>ca1cbf5</code> · rollout evidence <code>33f6ac3</code> · 2026-10-28<br>
+    <a href="COMPANION_UPGRADE.th.md">คู่มือรุ่นล่าสุด TH</a> · <a href="COMPANION_UPGRADE.en.md" lang="en">Latest guide EN</a> · <a href="EXTENSIONS.th.md">MCP / extensions</a> · <a href="../PROGRESS.md">Verification record</a><br>
+    Default light style retained by owner choice. Two doc-wide views; request/response internals, table schemas and full network ACL matrices are summarized rather than drawn.<br>
+    Web fonts: Instrument Serif / Geist / Geist Mono / Noto Sans Thai. Offline rendering uses available local/system fallbacks.
+  </footer>
+</main>
+</body>
+</html>
