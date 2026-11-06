@@ -150,3 +150,47 @@ def board_summary(data: dict) -> str:
     else:
         lines.append("เวลาเปิดเครื่อง: ไม่พร้อมใช้งาน")
     return "\n".join(lines)
+
+
+def is_board_question(text: str) -> bool:
+    return bool(re.fullmatch(r'\s*(?:บอร์ดเป็น(?:ยัง)?ไง(?:บ้าง)?|สถานะบอร์ด|บอร์ดเป็นอย่างไร)(?:ครับ|ค่ะ|คะ)?[\s?!?.]*', text))
+
+
+async def _service_state(unit: str) -> str:
+    try:
+        process = await asyncio.create_subprocess_exec('systemctl', 'is-active', unit,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        try:
+            output, _ = await asyncio.wait_for(process.communicate(), timeout=2)
+        except TimeoutError:
+            process.kill()
+            await process.wait()
+            return 'ไม่ทราบ'
+        state = output.decode('ascii', 'replace').strip()
+        if state == 'active':
+            return 'ทำงาน'
+        if state in {'inactive', 'failed'}:
+            return 'ไม่ทำงาน'
+    except OSError:
+        pass
+    # DynamicUser may lack system-bus access; cgroup membership only proves
+    # that a process exists, not the systemd health or readiness of a service.
+    procs = _read(Path('/sys/fs/cgroup/system.slice') / unit / 'cgroup.procs')
+    return 'มีโปรเซส (ยังไม่ยืนยันความพร้อม)' if procs and any(line.isdigit() for line in procs.splitlines()) else 'ไม่ทราบ'
+
+
+async def board_assessment() -> str:
+    data, bot, search = await asyncio.gather(board_status(), _service_state('discord-usb-bot.service'), _service_state('discord-usb-search.service'))
+    warnings = []
+    disk = data.get('disk')
+    if disk and disk['total'] and disk['used'] / disk['total'] >= .85:
+        warnings.append('พื้นที่เก็บข้อมูลใช้ไปอย่างน้อย 85%')
+    ram = data.get('ram')
+    if ram and ram['available'] < 64 * 1024**2:
+        warnings.append('RAM พร้อมใช้เหลือน้อยกว่า 64 MiB')
+    if any(value >= 80 for value in data.get('temperatures_c', {}).values()):
+        warnings.append('มีเซนเซอร์อุณหภูมิอย่างน้อย 80°C')
+    if bot == 'ไม่ทำงาน' or search == 'ไม่ทำงาน':
+        warnings.append('มีบริการที่ไม่ทำงาน')
+    assessment = 'ข้อสังเกต: ' + ('; '.join(warnings) if warnings else 'ไม่พบค่าเกินเกณฑ์ที่ตรวจในครั้งนี้')
+    return board_summary(data) + f'\nบริการบอท: {bot} · ค้นเว็บ: {search}\n' + assessment

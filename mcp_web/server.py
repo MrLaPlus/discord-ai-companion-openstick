@@ -166,6 +166,58 @@ async def search(query: str, max_results: int = 5) -> dict:
         return {"ok": False, "error": "search_unavailable"}
 
 
+async def search_images(query: str) -> dict:
+    """Return bounded public image URLs and their originating pages."""
+    if not query.strip() or len(query) > 300 or re.search(r"gsk_|tvly-|sk-[a-zA-Z0-9]{12}|password\s*[:=]|secret\s*[:=]", query, re.I):
+        return {"ok": False, "error": "invalid_arguments"}
+    async def body(response):
+        if response.status_code != 200:
+            raise ValueError('image search unavailable')
+        data = bytearray()
+        async for chunk in response.aiter_bytes():
+            data.extend(chunk)
+            if len(data) > 262144:
+                raise ValueError('image response too large')
+        return bytes(data)
+    def valid(image, source, title):
+        try:
+            return {"title": str(title)[:200], "url": public_url(source), "text": public_url(image)}
+        except (ValueError, TypeError):
+            return None
+    key = os.environ.get('TAVILY_API_KEY', '').strip()
+    try:
+        async with asyncio.timeout(16), httpx.AsyncClient(trust_env=False, follow_redirects=False, timeout=7, headers={'Accept-Encoding': 'identity', 'User-Agent': 'Mozilla/5.0'}) as client:
+            if key and time.monotonic() >= tavily_pause_until:
+                try:
+                    async with client.stream('POST', 'https://api.tavily.com/search', headers={'Authorization': 'Bearer ' + key}, json={'query': query, 'max_results': 3, 'search_depth': 'basic', 'include_images': True, 'include_image_descriptions': False, 'safe_search': True, 'auto_parameters': False}) as response:
+                        payload = json.loads(await body(response))
+                    images = payload.get('images', [])
+                    if isinstance(images, list):
+                        cleaned = [item for image in images[:5] if isinstance(image, str) and (item := valid(image, image, 'รูปจาก Tavily'))]
+                        if cleaned:
+                            return {'ok': True, 'results': cleaned, 'provider': 'tavily', 'fetched_at': datetime.now(timezone.utc).isoformat()}
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    pass
+            async with client.stream('GET', 'https://duckduckgo.com/', params={'q': query, 'kp': '1'}) as response:
+                html = (await body(response)).decode('utf-8', 'replace')
+            match = re.search(r'vqd=[\"\']?([0-9-]+)', html)
+            if not match:
+                raise ValueError('search token unavailable')
+            async with client.stream('GET', 'https://duckduckgo.com/i.js', params={'q': query, 'vqd': match[1], 'o': 'json', 'p': '1'}) as response:
+                payload = json.loads(await body(response))
+            raw = payload.get('results', [])
+            if not isinstance(raw, list):
+                raise ValueError('invalid image results')
+            cleaned = [item for result in raw[:5] if isinstance(result, dict) and isinstance(result.get('image'), str) and isinstance(result.get('url'), str) and (item := valid(result['image'], result['url'], result.get('title', 'รูปจาก DuckDuckGo')))]
+            return {'ok': True, 'results': cleaned, 'provider': 'duckduckgo', 'fetched_at': datetime.now(timezone.utc).isoformat()}
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        return {'ok': False, 'error': 'search_unavailable'}
+
+
 # HTML parsing is deliberately serialized to bound peak memory on the USB board.
 fetch_slots = asyncio.Semaphore(1)
 
@@ -187,6 +239,7 @@ for name in ("search", "fetch_content", "expand_link"):
     ddg.mcp.remove_tool(name)
 ddg.mcp.add_tool(search)
 ddg.mcp.add_tool(fetch_content)
+ddg.mcp.add_tool(search_images)
 
 
 if __name__ == "__main__":

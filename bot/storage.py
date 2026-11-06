@@ -38,6 +38,19 @@ class Store:
                 optout INTEGER NOT NULL DEFAULT 0, tone INTEGER NOT NULL DEFAULT 1,
                 PRIMARY KEY(guild, user)
             );
+            CREATE TABLE IF NOT EXISTS workflow_tasks (
+                id TEXT PRIMARY KEY, platform TEXT NOT NULL, guild INTEGER NOT NULL,
+                channel INTEGER NOT NULL, owner INTEGER NOT NULL, kind TEXT NOT NULL,
+                topic TEXT NOT NULL, stage TEXT NOT NULL, status TEXT NOT NULL,
+                evidence TEXT NOT NULL DEFAULT '[]', result TEXT NOT NULL DEFAULT '',
+                created REAL NOT NULL, updated REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS workflow_owner ON workflow_tasks(platform,guild,channel,owner,updated);
+            CREATE TABLE IF NOT EXISTS telegram_chat_turns (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, user INTEGER NOT NULL,
+                question TEXT NOT NULL, answer TEXT NOT NULL, created REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS telegram_chat_user_time ON telegram_chat_turns(user,created);
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY, guild INTEGER NOT NULL, channel INTEGER NOT NULL,
                 author INTEGER NOT NULL, content TEXT NOT NULL, created REAL NOT NULL
@@ -62,6 +75,26 @@ class Store:
             );
             CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         """)
+        self.db.executescript("""
+            CREATE TABLE IF NOT EXISTS scheduled_jobs (
+                id TEXT PRIMARY KEY, platform TEXT NOT NULL, guild INTEGER NOT NULL,
+                channel INTEGER NOT NULL, owner INTEGER NOT NULL, kind TEXT NOT NULL,
+                body TEXT NOT NULL, daily INTEGER NOT NULL, next_at REAL NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active', created REAL NOT NULL,
+                last_result TEXT NOT NULL DEFAULT '', last_due REAL
+            );
+            CREATE INDEX IF NOT EXISTS scheduled_due ON scheduled_jobs(status,next_at);
+        """)
+        if "transcript_enabled" not in {r[1] for r in self.db.execute("PRAGMA table_info(users)")}:
+            with self.db:
+                self.db.execute("ALTER TABLE users ADD COLUMN transcript_enabled INTEGER NOT NULL DEFAULT 1")
+        if "progress_enabled" not in {r[1] for r in self.db.execute("PRAGMA table_info(users)")}:
+            with self.db:
+                self.db.execute("ALTER TABLE users ADD COLUMN progress_enabled INTEGER NOT NULL DEFAULT 1")
+        scheduled_columns = {r[1] for r in self.db.execute("PRAGMA table_info(scheduled_jobs)")}
+        if "weekday" not in scheduled_columns:
+            with self.db:
+                self.db.execute("ALTER TABLE scheduled_jobs ADD COLUMN weekday INTEGER")
         if "cached" not in {r[1] for r in self.db.execute("PRAGMA table_info(messages)")}:
             with self.db:
                 self.db.execute("ALTER TABLE messages ADD COLUMN cached REAL NOT NULL DEFAULT 0")
@@ -159,12 +192,12 @@ class Store:
 
     def user(self, guild: int, user: int) -> dict:
         row = self.db.execute("SELECT * FROM users WHERE guild=? AND user=?", (guild, user)).fetchone()
-        return dict(row) if row else {"guild": guild, "user": user, "optout": 0, "tone": 1}
+        return dict(row) if row else {"guild": guild, "user": user, "optout": 0, "tone": 1, "progress_enabled": 1, "transcript_enabled": 1}
 
     def set_user(self, guild: int, user: int, **changes):
         if "tone" in changes and changes["tone"] not in range(5):
             raise ValueError("Tone must be 0 through 4")
-        if not changes or not changes.keys() <= {"optout", "tone"}:
+        if not changes or not changes.keys() <= {"optout", "tone", "progress_enabled", "transcript_enabled"}:
             raise ValueError("Unknown user setting")
         with self.db:
             self.db.execute("INSERT OR IGNORE INTO users(guild,user) VALUES (?,?)", (guild, user))
@@ -177,9 +210,36 @@ class Store:
 
                 record(self.privacy_folder, guild, user, optout=bool(changes["optout"]))
             if changes.get("optout"):
+                key = f'tokenme:model:telegram:{user}' if guild == -1 else f'tokenme:model:discord:{guild}:{user}'
+                self.db.execute('DELETE FROM metadata WHERE key=?', (key,))
                 self.db.execute("DELETE FROM messages WHERE guild=? AND author=?", (guild, user))
+                self.db.execute("DELETE FROM workflow_tasks WHERE guild=? AND owner=?", (guild, user))
+                if guild == -1:
+                    self.db.execute("DELETE FROM telegram_chat_turns WHERE user=?", (user,))
                 self.db.execute("DELETE FROM memories WHERE guild=? AND owner=?", (guild, user))
                 self.db.execute("DELETE FROM answers WHERE guild=? AND requester=?", (guild, user))
+
+    def telegram_turns(self, user, limit=6, now=None, since=None):
+        if self.user(-1, user)['optout']:
+            return []
+        now = time.time() if now is None else now
+        cutoff = max(now - 7 * 86400, since) if since is not None else now - 7 * 86400
+        rows = self.db.execute("SELECT question,answer FROM telegram_chat_turns WHERE user=? AND created>=? ORDER BY id DESC LIMIT ?", (user, cutoff, min(max(1, limit), 100))).fetchall()
+        return [tuple(row) for row in reversed(rows)]
+
+    def add_telegram_turn(self, user, question, answer, now=None):
+        if self.user(-1, user)['optout']:
+            return
+        now = time.time() if now is None else now
+        with self.db:
+            self.db.execute("INSERT INTO telegram_chat_turns(user,question,answer,created) VALUES (?,?,?,?)", (user, question[:1000], answer[:1500], now))
+            self.db.execute("DELETE FROM telegram_chat_turns WHERE user=? AND id NOT IN (SELECT id FROM telegram_chat_turns WHERE user=? ORDER BY id DESC LIMIT 100)", (user, user))
+
+    def clear_telegram_turns(self, user):
+        from .privacy import clear_telegram_chat
+        clear_telegram_chat(self.privacy_folder, user)
+        with self.db:
+            self.db.execute("DELETE FROM telegram_chat_turns WHERE user=?", (user,))
 
     def put_message(
         self, message_id: int, guild: int, channel: int, author: int, content: str, created: float
@@ -236,6 +296,8 @@ class Store:
 
         apply_ledger(self.db, self.privacy_folder)
         with self.db:
+            model_key = f'tokenme:model:telegram:{user}' if guild == -1 else f'tokenme:model:discord:{guild}:{user}'
+            self.db.execute('DELETE FROM metadata WHERE key=?', (model_key,))
             for key in (f"length:{guild}:{user}", f"gentle:{guild}:{user}", f"suggestions:{guild}:{user}"):
                 self.db.execute("DELETE FROM metadata WHERE key=?", (key,))
 
@@ -445,6 +507,8 @@ class Store:
     def maintain(self, history_days: int, memory_days: int, max_messages: int):
         now = time.time()
         with self.db:
+            self.db.execute("DELETE FROM workflow_tasks WHERE updated<?", (now - 7 * 86400,))
+            self.db.execute("DELETE FROM telegram_chat_turns WHERE created<?", (now - 7 * 86400,))
             self.db.execute("DELETE FROM messages WHERE cached<?", (now - history_days * 86400,))
             self.db.execute("DELETE FROM answers WHERE created<?", (now - history_days * 86400,))
             self.db.execute("DELETE FROM memories WHERE created<?", (now - memory_days * 86400,))

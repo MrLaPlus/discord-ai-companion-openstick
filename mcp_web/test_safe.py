@@ -161,7 +161,7 @@ class ReaderTests(unittest.IsolatedAsyncioTestCase):
         ):
             async with Client(ddg.mcp, read_timeout_seconds=5) as client:
                 names = {tool.name for tool in (await client.list_tools()).tools}
-                self.assertEqual(names, {"search", "fetch_content"})
+                self.assertEqual(names, {"search", "fetch_content", "search_images"})
                 result = await client.session.call_tool("search", {"query": "public query"})
                 data = result.structured_content or json.loads(result.content[0].text)
                 self.assertTrue(data["ok"])

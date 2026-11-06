@@ -22,6 +22,28 @@ class StorageTests(unittest.TestCase):
     def message(self, mid=1, guild=10, channel=20, author=30, content="ชอบเกมแมว", age=0):
         self.store.put_message(mid, guild, channel, author, content, time.time() - age)
 
+    def test_progress_setting_migrates_legacy_users_and_persists(self):
+        path = Path(self.temp.name) / 'legacy.sqlite3'
+        with sqlite3.connect(path) as db:
+            db.execute('CREATE TABLE users (guild INTEGER NOT NULL, user INTEGER NOT NULL, optout INTEGER NOT NULL DEFAULT 0, tone INTEGER NOT NULL DEFAULT 1, PRIMARY KEY(guild,user))')
+            db.execute('INSERT INTO users VALUES (10, 30, 0, 2)')
+        migrated = Store(path)
+        try:
+            self.assertEqual(migrated.user(10, 30)['tone'], 2)
+            self.assertEqual(migrated.user(10, 30)['progress_enabled'], 1)
+            self.assertEqual(migrated.user(10, 30)['transcript_enabled'], 1)
+            migrated.set_user(10, 30, progress_enabled=0, transcript_enabled=0)
+        finally:
+            migrated.close()
+        migrated = Store(path)
+        try:
+            self.assertEqual(migrated.user(10, 30)['progress_enabled'], 0)
+            self.assertEqual(migrated.user(10, 30)['transcript_enabled'], 0)
+            self.assertEqual(migrated.user(10, 31)['progress_enabled'], 1)
+            self.assertEqual(migrated.user(10, 31)['transcript_enabled'], 1)
+        finally:
+            migrated.close()
+
     def test_memory_and_settings_survive_restart(self):
         mid = self.store.remember(10, 20, 30, "เรียกเราว่าแมว")
         self.store.set_channel(10, 20, bot_room=1, readable=1)

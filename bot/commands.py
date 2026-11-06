@@ -46,6 +46,7 @@ class SlashMessage:
             allowed_mentions=discord.AllowedMentions.none(),
             wait=True,
             **({"view": kwargs["view"]} if "view" in kwargs else {}),
+            **({"file": kwargs["file"]} if "file" in kwargs else {}),
         )
 
 
@@ -354,21 +355,17 @@ def register(bot):
     @app_commands.guild_only()
     async def help_command(interaction: discord.Interaction):
         await ensure(interaction)
-        await respond(
-            interaction,
-            "แท็กหรือตอบกลับบอทเพื่อคุย; ห้องบอทคุยได้โดยไม่แท็ก\n"
-            "/remember /memory list|edit|clear /forget — จัดการความจำ\n"
-            "/tone — ระดับแซวของคุณ; /privacy — ปิดการเก็บข้อมูลและลบของเดิม\n"
-            "/catchup — สรุปตัวอย่างประวัติที่มีสิทธิ์ใช้\n"
-            "/panel ตั้งค่า · /joke มุกยินยอม · /stop หยุดฉุกเฉิน\n"
-            "/feedback แอดมินดูข้อเสนอแนะ\n"
-            "แอดมิน: /settings /history import /room-memory /pause /status\n"
-            "ห้องที่แอดมินเปิดอ่านจะเก็บข้อความคนตามอายุข้อมูลที่ตั้งไว้ "
-            "ข้อความและความจำที่เกี่ยวข้องจะถูกส่งให้ Groq เมื่อมีการตอบ "
-            "คำตอบบอทจำชั่วคราวใน RAM ตามคน/ห้อง และล้างเมื่อหมดอายุหรือ /privacy ปิดเก็บ\n"
-            "พิมพ์ หาเพิ่ม / หาเก่ากว่านี้ เพื่อค้นต่อ; /memory suggestions เพื่อปิดข้อเสนอจำ\n"
-            "backup อัตโนมัติเก็บในเครื่อง; ไม่รองรับคุย DM/threads/ไฟล์แนบในรุ่นนี้",
+        from .capabilities import capability_text, schedule_is_ready
+        message = SlashMessage(interaction, "")
+        text = capability_text(
+            "discord", web_enabled=bot.tool_allowed(message, "search", interaction.user),
+            fetch_enabled=bot.tool_allowed(message, "fetch_content", interaction.user),
+            storage_allowed=not bot.store.user(interaction.guild.id, interaction.user.id)["optout"],
+            memory_enabled=bool(bot.settings(interaction.guild.id, interaction.channel.id)["readable"]),
+            scheduler_ready=schedule_is_ready(bot),
         )
+        await respond(interaction, text + "\n\n/ask ถามส่วนตัว · /panel ตั้งค่า · /privacy จัดการข้อมูล · /mcp ตั้งค่าเว็บ\n"
+                      "ห้องที่เปิดอ่านอาจเก็บข้อความตามอายุข้อมูลที่ตั้งไว้; ข้อความและความจำที่เกี่ยวข้องอาจส่งให้ Groq เมื่อตอบ")
 
     @bot.tree.command(name="remember", description="บอกให้จำเรื่องของคุณ เฉพาะขอบเขตห้องนี้")
     @app_commands.guild_only()
@@ -461,6 +458,13 @@ def register(bot):
             "ยังคุยได้ โดยข้อความที่ใช้เรียกบอทจะถูกส่งให้ AI เพื่อการตอบครั้งนั้น "
             "backup เดิมหมดอายุตามรอบผู้ดูแล และใช้บันทึกการลบกันคืนข้อมูล",
         )
+
+    @bot.tree.command(name="progress", description="เปิดหรือปิดข้อความแจ้งความคืบหน้าของคุณ")
+    @app_commands.guild_only()
+    async def progress_setting(interaction: discord.Interaction, enabled: bool):
+        await ensure(interaction)
+        bot.store.set_user(interaction.guild.id, interaction.user.id, progress_enabled=int(enabled))
+        await respond(interaction, "เปิดแจ้งความคืบหน้าแล้วครับ" if enabled else "ปิดแจ้งความคืบหน้าแล้วครับ")
 
     @bot.tree.command(name="tone", description="ระดับความกวนที่คุณยอมรับ 0–4 (4=เรื้อน) (0=หยุดแซว)")
     @app_commands.guild_only()
@@ -565,6 +569,105 @@ def register(bot):
         await interaction.edit_original_response(
             content=result.replace("คำตอบจะส่งในห้องนี้", "คำตอบจะแสดงให้คุณคนเดียว")
         )
+
+    @bot.tree.command(name="time", description="วันและเวลาปัจจุบันของบอท")
+    @app_commands.guild_only()
+    async def show_time(interaction: discord.Interaction):
+        await ensure(interaction)
+        from .schedule import clock_text
+        await respond(interaction, clock_text(bot.config.timezone))
+
+    @bot.tree.command(name="schedule", description="ตั้งเวลาเตือนหรือรายงานข่าว ส่งในห้องนี้")
+    @app_commands.guild_only()
+    async def schedule(interaction: discord.Interaction, request: app_commands.Range[str, 1, 400]):
+        await ensure(interaction)
+        channel = interaction.channel
+        bot_member = interaction.guild.me
+        if (not channel.permissions_for(interaction.user).view_channel or bot_member is None
+                or not channel.permissions_for(bot_member).send_messages
+                or not bot.settings(interaction.guild.id, channel.id)["respond"]
+                or bot.settings(interaction.guild.id, channel.id)["paused"]):
+            raise ValueError("ห้องนี้ไม่เปิดให้บอทตอบ หรือคุณไม่มีสิทธิ์ดูห้องครับ")
+        if request.strip().startswith("รายงานข่าว") and not bot.tool_allowed(SlashMessage(interaction, request), "search", interaction.user):
+            raise ValueError("ห้องนี้ยังไม่เปิดค้นเว็บหรือคุณไม่มีสิทธิ์ จึงตั้งรายงานข่าวไม่ได้ครับ")
+        from .schedule import request_reply
+        result = request_reply(bot.store, "discord", interaction.guild.id, channel.id, interaction.user.id, request, bot.config.timezone)
+        if result is None:
+            raise ValueError("ใช้ เตือนพรุ่งนี้ 07:00 ข้อความ หรือ รายงานข่าว AI ทุกวัน 07:00 ครับ")
+        await respond(interaction, result + "\nข้อความจะส่งในห้องนี้")
+
+    @bot.tree.command(name="model", description="เลือกโมเดล AI สำหรับตัวคุณ")
+    @app_commands.guild_only()
+    @app_commands.choices(choice=[app_commands.Choice(name=name, value=name) for name in ('auto','deepseek','qwen','groq')])
+    async def model(interaction: discord.Interaction, choice: app_commands.Choice[str] | None = None):
+        await ensure(interaction)
+        from .provider import user_model
+        key = f'tokenme:model:discord:{interaction.guild.id}:{interaction.user.id}'
+        if choice is None:
+            await respond(interaction, f"โมเดลปัจจุบัน: {user_model(bot.store,key)}")
+        elif choice.value not in {'auto','deepseek','qwen','groq'}:
+            raise ValueError('โมเดลไม่ถูกต้องครับ')
+        elif bot.store.user(interaction.guild.id, interaction.user.id)['optout']:
+            raise ValueError('ปิดการเก็บข้อมูลอยู่ จึงไม่บันทึกโมเดลครับ')
+        else:
+            bot.store.set_meta(key, {'value':choice.value, 'created':time.time()})
+            await respond(interaction, f'ตั้งโมเดลเป็น {choice.value} แล้วครับ')
+
+    @bot.tree.command(name="usage", description="ดูการใช้ AI ของบอท")
+    @app_commands.guild_only()
+    async def usage(interaction: discord.Interaction, detail: bool = False):
+        await ensure(interaction, admin=True)
+        from .usage_stats import display
+        await respond(interaction, display(bot.store, detail=detail, zone=bot.config.timezone))
+
+    @bot.tree.command(name="report", description="สร้างรายงาน Markdown หรือ TXT พร้อมแหล่งข้อมูล")
+    @app_commands.guild_only()
+    async def report(interaction: discord.Interaction, format: str, topic: app_commands.Range[str, 1, 250]):
+        await ensure(interaction)
+        from .report_workflow import parse_report
+        question = f'/report {format} {topic}'
+        parse_report(question)
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        result = await bot.enqueue(SlashMessage(interaction, question), 'direct', question)
+        await interaction.edit_original_response(content=result.replace('คำตอบจะส่งในห้องนี้', 'คำตอบจะแสดงให้คุณคนเดียว'))
+
+    @bot.tree.command(name="skills", description="ดูทักษะที่บอทเรียกใช้ได้")
+    @app_commands.guild_only()
+    async def skills(interaction: discord.Interaction):
+        await ensure(interaction)
+        from .skill_registry import skill_list
+        await respond(interaction, skill_list())
+
+    @bot.tree.command(name="skill", description="เรียกใช้ทักษะที่บอทรองรับ")
+    @app_commands.guild_only()
+    async def skill(interaction: discord.Interaction, name: str, topic: app_commands.Range[str, 1, 300]):
+        await ensure(interaction)
+        from .skill_registry import invoke_skill
+        question = invoke_skill(name, topic)
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        result = await bot.enqueue(SlashMessage(interaction, question), 'direct', question)
+        await interaction.edit_original_response(content=result.replace('คำตอบจะส่งในห้องนี้', 'คำตอบจะแสดงให้คุณคนเดียว'))
+
+    @bot.tree.command(name="tasks", description="ดูงานและรายการตั้งเวลาของคุณในห้องนี้")
+    @app_commands.guild_only()
+    async def tasks(interaction: discord.Interaction):
+        await ensure(interaction)
+        from .task_overview import task_overview
+        await respond(interaction, task_overview(bot.store, 'discord', interaction.guild.id, interaction.channel.id, interaction.user.id, bot.config.timezone))
+
+    @bot.tree.command(name="schedules", description="ดูรายการตั้งเวลาของคุณ")
+    @app_commands.guild_only()
+    async def schedules(interaction: discord.Interaction):
+        await ensure(interaction)
+        from .schedule import listing
+        await respond(interaction, listing(bot.store, "discord", interaction.guild.id, interaction.user.id, bot.config.timezone))
+
+    @bot.tree.command(name="cancel_schedule", description="ยกเลิกรายการตั้งเวลาของคุณ")
+    @app_commands.guild_only()
+    async def cancel_scheduled(interaction: discord.Interaction, id: app_commands.Range[str, 8, 32]):
+        await ensure(interaction)
+        from .schedule import cancel
+        await respond(interaction, "ยกเลิกรายการแล้วครับ" if cancel(bot.store, "discord", interaction.guild.id, interaction.user.id, id.lower()) else "ไม่พบรายการของคุณครับ")
 
     @bot.tree.command(name="pause", description="พักหรือเปิดบอทในห้องนี้ หรือทั้งเซิร์ฟเวอร์")
     @app_commands.guild_only()

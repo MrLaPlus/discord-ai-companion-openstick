@@ -16,8 +16,12 @@ def ledger(folder):
         path.chmod(0o600)
     try:
         db.executescript("""
+            CREATE TABLE IF NOT EXISTS forgotten_workflow_tasks (id TEXT PRIMARY KEY);
+            CREATE TABLE IF NOT EXISTS telegram_chat_erased (user INTEGER PRIMARY KEY, cutoff REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS erased (guild INTEGER, user INTEGER, cutoff REAL DEFAULT 0,
                 optout INTEGER DEFAULT 0, PRIMARY KEY(guild,user));
+            CREATE TABLE IF NOT EXISTS cancelled_schedules (id TEXT PRIMARY KEY);
+            CREATE TABLE IF NOT EXISTS schedule_claims (id TEXT, due REAL, next_at REAL, PRIMARY KEY(id,due));
             CREATE TABLE IF NOT EXISTS removed_jokes (guild INTEGER, channel INTEGER, joke TEXT, PRIMARY KEY(guild,channel,joke));
             CREATE TABLE IF NOT EXISTS forgotten (guild INTEGER, user INTEGER, memory INTEGER,
                 PRIMARY KEY(guild,user,memory));
@@ -60,6 +64,27 @@ def forget_item(folder, guild, user, memory):
         )
 
 
+def claim_schedule(folder, job_id, due, next_at):
+    with ledger(folder) as db, db:
+        result = db.execute("INSERT OR IGNORE INTO schedule_claims VALUES (?,?,?)", (job_id, due, next_at))
+        return bool(result.rowcount)
+
+
+def clear_telegram_chat(folder, user, when=None):
+    with ledger(folder) as db, db:
+        db.execute("INSERT INTO telegram_chat_erased VALUES (?,?) ON CONFLICT(user) DO UPDATE SET cutoff=max(cutoff,excluded.cutoff)", (user, time.time() if when is None else when))
+
+
+def cancel_schedule(folder, job_id):
+    with ledger(folder) as db, db:
+        db.execute("INSERT OR IGNORE INTO cancelled_schedules VALUES (?)", (job_id,))
+
+
+def forget_workflow_task(folder, task_id):
+    with ledger(folder) as db, db:
+        db.execute("INSERT OR IGNORE INTO forgotten_workflow_tasks VALUES (?)", (task_id,))
+
+
 def forget_joke(folder, guild, channel, joke):
     with ledger(folder) as db, db:
         db.execute("INSERT OR IGNORE INTO removed_jokes VALUES (?,?,?)", (guild, channel, joke))
@@ -68,10 +93,42 @@ def forget_joke(folder, guild, channel, joke):
 def apply_ledger(db, folder):
     with ledger(folder) as journal:
         rows = journal.execute("SELECT guild,user,cutoff,optout FROM erased").fetchall()
+        telegram_erased = journal.execute("SELECT user,cutoff FROM telegram_chat_erased").fetchall()
         removed = set(journal.execute("SELECT guild,channel,joke FROM removed_jokes").fetchall())
         items = journal.execute("SELECT guild,user,memory,cutoff FROM forgotten").fetchall()
+        cancelled = journal.execute("SELECT id FROM cancelled_schedules").fetchall()
+        forgotten_tasks = journal.execute("SELECT id FROM forgotten_workflow_tasks").fetchall()
+        claims = journal.execute("SELECT id,due,next_at FROM schedule_claims ORDER BY due").fetchall()
     with db:
+        has_schedule = bool(db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='scheduled_jobs'").fetchone())
+        if has_schedule:
+            db.executemany("DELETE FROM scheduled_jobs WHERE id=?", cancelled)
+            for job_id, due, next_at in claims:
+                db.execute("UPDATE scheduled_jobs SET next_at=?,status=CASE WHEN daily=1 THEN 'active' ELSE 'finished' END,last_due=?,last_result='uncertain' WHERE id=? AND next_at<=? AND status IN ('active','sending')", (next_at, due, job_id, due))
+        has_workflows = bool(db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='workflow_tasks'").fetchone())
+        if has_workflows:
+            db.executemany("DELETE FROM workflow_tasks WHERE id=?", forgotten_tasks)
+        has_telegram_chat = bool(db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='telegram_chat_turns'").fetchone())
+        if has_telegram_chat:
+            for user, until in telegram_erased:
+                db.execute("DELETE FROM telegram_chat_turns WHERE user=? AND created<=?", (user, until))
         for guild, user, until, optout in rows:
+            model_key = f'tokenme:model:telegram:{user}' if guild == -1 else f'tokenme:model:discord:{guild}:{user}'
+            entry = db.execute('SELECT value FROM metadata WHERE key=?', (model_key,)).fetchone()
+            if entry:
+                try:
+                    item = json.loads(entry[0])
+                    created = float(item.get('created', 0)) if isinstance(item, dict) else 0
+                except (ValueError, TypeError):
+                    created = 0
+                if optout or created <= until:
+                    db.execute('DELETE FROM metadata WHERE key=?', (model_key,))
+            if has_workflows:
+                db.execute("DELETE FROM workflow_tasks WHERE guild=? AND owner=? AND (created<=? OR ?)", (guild, user, until, optout))
+            if has_schedule:
+                db.execute("DELETE FROM scheduled_jobs WHERE guild=? AND owner=? AND (created<=? OR ?)", (guild, user, until, optout))
+            if has_telegram_chat and guild == -1:
+                db.execute("DELETE FROM telegram_chat_turns WHERE user=? AND (created<=? OR ?)", (user, until, optout))
             db.execute("INSERT OR IGNORE INTO users(guild,user) VALUES (?,?)", (guild, user))
             db.execute("UPDATE users SET optout=? WHERE guild=? AND user=?", (optout, guild, user))
             for table, author in (("messages", "author"), ("memories", "owner"), ("answers", "requester")):
@@ -106,7 +163,15 @@ def copy_ledger(source_folder, destination_folder):
         rows = source.execute("SELECT guild,user,cutoff,optout FROM erased").fetchall()
         items = source.execute("SELECT guild,user,memory,cutoff FROM forgotten").fetchall()
         jokes = source.execute("SELECT guild,channel,joke FROM removed_jokes").fetchall()
+        cancelled = source.execute("SELECT id FROM cancelled_schedules").fetchall()
+        forgotten_tasks = source.execute("SELECT id FROM forgotten_workflow_tasks").fetchall()
+        claims = source.execute("SELECT id,due,next_at FROM schedule_claims").fetchall()
+        telegram_erased = source.execute("SELECT user,cutoff FROM telegram_chat_erased").fetchall()
     with ledger(destination_folder) as target, target:
+        target.executemany("INSERT INTO telegram_chat_erased VALUES (?,?) ON CONFLICT(user) DO UPDATE SET cutoff=max(cutoff,excluded.cutoff)", telegram_erased)
+        target.executemany("INSERT OR IGNORE INTO forgotten_workflow_tasks VALUES (?)", forgotten_tasks)
+        target.executemany("INSERT OR IGNORE INTO cancelled_schedules VALUES (?)", cancelled)
+        target.executemany("INSERT OR IGNORE INTO schedule_claims VALUES (?,?,?)", claims)
         for row in rows:
             target.execute(
                 "INSERT INTO erased VALUES (?,?,?,?) ON CONFLICT(guild,user) DO UPDATE SET cutoff=max(cutoff,excluded.cutoff),optout=max(optout,excluded.optout)",

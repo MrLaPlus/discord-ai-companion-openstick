@@ -44,6 +44,53 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
     def job(self):
         return Job(self.message, "direct", self.message.content, self.bot.revision)
 
+    async def test_board_question_requires_admin_and_sends_metrics_only_in_dm(self):
+        self.message.content = 'บอร์ดเป็นไงบ้าง'
+        self.message.author.guild_permissions = SimpleNamespace(manage_guild=False)
+        self.message.author.send = AsyncMock()
+        with patch('bot.board_status.board_assessment', new=AsyncMock(return_value='PRIVATE_METRICS')) as measure:
+            await self.bot.process(self.job())
+            measure.assert_not_awaited()
+            self.message.author.send.assert_not_awaited()
+            self.message.author.guild_permissions.manage_guild = True
+            await self.bot.process(self.job())
+            self.message.author.send.assert_awaited_once()
+            self.assertIn('PRIVATE_METRICS', self.message.author.send.await_args.args[0])
+            self.assertNotIn('PRIVATE_METRICS', self.message.reply.await_args.args[0])
+
+    async def test_board_question_permission_revoked_before_dm(self):
+        self.message.content = 'บอร์ดเป็นไงบ้าง'
+        self.message.author.guild_permissions = SimpleNamespace(manage_guild=True)
+        self.message.author.send = AsyncMock()
+        revoked = SimpleNamespace(id=30, guild_permissions=SimpleNamespace(manage_guild=False))
+        self.bot.access_snapshot.side_effect = [(self.channel, self.message.author, [20], 1), (self.channel, revoked, [20], 1)]
+        with patch('bot.board_status.board_assessment', new=AsyncMock(return_value='PRIVATE_METRICS')):
+            await self.bot.process(self.job())
+        self.message.author.send.assert_not_awaited()
+
+    async def test_discord_progress_slash_setting_is_private_and_per_user(self):
+        register(self.bot)
+        command = self.bot.tree.get_command('progress')
+        self.assertIsNotNone(command)
+        self.bot.in_scope = lambda guild: True
+        interaction = SimpleNamespace(guild=self.guild, channel=self.channel, user=self.message.author,
+            response=SimpleNamespace(is_done=lambda: False, send_message=AsyncMock()))
+        await command.callback(interaction, enabled=False)
+        self.assertEqual(self.bot.store.user(10, 30)['progress_enabled'], 0)
+        self.assertEqual(self.bot.store.user(10, 31)['progress_enabled'], 1)
+        self.assertTrue(interaction.response.send_message.await_args.kwargs['ephemeral'])
+        await command.callback(interaction, enabled=True)
+        self.assertEqual(self.bot.store.user(10, 30)['progress_enabled'], 1)
+
+    async def test_natural_schedule_edit_routes_through_discord(self):
+        from bot.schedule import create, parse_request
+        req = parse_request('เตือนทุกวัน 23:55 กินยา', self.bot.config.timezone)
+        create(self.bot.store, 'discord', 10, 20, 30, req)
+        self.message.content = 'เลื่อนเตือนกินยาเป็น 23:56'
+        await self.bot.process(self.job())
+        self.assertIn('เลื่อนแล้ว', self.message.reply.await_args.args[0])
+        self.bot.provider.chat.assert_not_awaited()
+
     async def test_real_pipeline_builds_scoped_prompt_and_sends_with_mentions_disabled(self):
         self.bot.store.put_message(2, 10, 999, 30, "PRIVATE_SECRET", self.message.created_at.timestamp())
         await self.bot.process(self.job())
@@ -53,6 +100,74 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
         kwargs = self.message.reply.call_args.kwargs
         self.assertFalse(kwargs["mention_author"])
         self.assertFalse(kwargs["allowed_mentions"].everyone)
+
+    async def test_capabilities_respect_discord_web_setting_without_calling_ai(self):
+        self.message.content = "บอททำอะไรได้บ้าง"
+        await self.bot.process(self.job())
+        reply = self.message.reply.await_args.args[0]
+        self.assertIn("ยังไม่ได้เปิดใช้", reply)
+        self.assertIn("ยังไม่รองรับอ่านรูป", reply)
+        self.assertNotIn("/tone 0–5", reply)
+        self.bot.provider.chat.assert_not_awaited()
+        self.assertEqual(self.bot.store.db.execute("SELECT count(*) FROM scheduled_jobs").fetchone()[0], 0)
+
+    async def test_capabilities_distinguish_tool_permissions_and_memory_room(self):
+        self.bot.config = replace(self.bot.config, mcp_enabled=True)
+        self.bot.store.set_meta("mcp:10:20", "hybrid")
+        self.bot.store.set_meta("tools:10:20:search", {"enabled": False})
+        self.bot.store.set_channel(10, 20, readable=0, respond=1)
+        self.message.content = "มีฟีเจอร์อะไรบ้าง"
+        await self.bot.process(self.job())
+        reply = self.message.reply.await_args.args[0]
+        self.assertIn("ค้นเว็บ: ยังไม่ได้เปิดใช้หรือคุณไม่มีสิทธิ์", reply)
+        self.assertIn("อ่านหน้าเว็บ HTTPS สาธารณะ", reply)
+        self.assertIn("ให้แอดมินเปิดอ่านห้องก่อน", reply)
+        self.bot.provider.chat.assert_not_awaited()
+
+    async def test_scheduled_news_refuses_when_search_permission_denied(self):
+        self.bot.config = replace(self.bot.config, mcp_enabled=True)
+        self.bot.store.set_meta("mcp:10:20", "hybrid")
+        self.bot.store.set_meta("tools:10:20:search", {"enabled": False})
+        self.message.content = "รายงานข่าว AI ทุกวัน 07:00"
+        await self.bot.process(self.job())
+        self.assertIn("ไม่มีสิทธิ์", self.message.reply.await_args.args[0])
+        self.assertEqual(self.bot.store.db.execute("SELECT count(*) FROM scheduled_jobs").fetchone()[0], 0)
+
+    async def test_ai_prompt_reflects_individual_tool_permissions(self):
+        self.bot.config = replace(self.bot.config, mcp_enabled=True)
+        self.bot.store.set_meta("mcp:10:20", "hybrid")
+        self.bot.store.set_meta("tools:10:20:search", {"enabled": False})
+        self.message.content = "เล่าเรื่องแมว"
+        self.bot.store.put_message(1, 10, 20, 30, self.message.content, self.message.created_at.timestamp())
+        await self.bot.process(self.job())
+        prompt = self.bot.provider.chat.await_args.args[0][0]["content"]
+        self.assertIn("Search is unavailable here", prompt)
+        self.assertIn("Public HTTPS reading is configured", prompt)
+        self.assertIn("Never claim to have searched", prompt)
+
+    async def test_help_command_uses_current_permissions(self):
+        register(self.bot)
+        interaction = MagicMock(spec=discord.Interaction)
+        interaction.guild = self.guild
+        interaction.channel = self.channel
+        interaction.user = self.message.author
+        interaction.response.is_done.return_value = False
+        interaction.response.send_message = AsyncMock()
+        await self.bot.tree.get_command("help").callback(interaction)
+        text = interaction.response.send_message.await_args.args[0]
+        self.assertIn("ยังไม่ได้เปิดใช้หรือคุณไม่มีสิทธิ์", text)
+        self.assertIn("ตัวตั้งเวลาไม่พร้อม", text)
+        self.assertTrue(interaction.response.send_message.await_args.kwargs["ephemeral"])
+
+    async def test_clock_and_reminder_messages_do_not_call_ai(self):
+        self.message.content = "ตอนนี้กี่โมง"
+        await self.bot.process(self.job())
+        self.assertIn("Asia/Bangkok", self.message.reply.await_args.args[0])
+        self.message.reply.reset_mock()
+        self.message.content = "เตือนทุกวัน 07:00 กินข้าว"
+        await self.bot.process(self.job())
+        self.assertIn("ตั้งเวลาแล้ว", self.message.reply.await_args.args[0])
+        self.bot.provider.chat.assert_not_awaited()
 
     async def test_privacy_change_while_provider_runs_suppresses_delivery(self):
         async def changed(messages):

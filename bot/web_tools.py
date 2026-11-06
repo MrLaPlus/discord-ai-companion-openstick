@@ -23,6 +23,7 @@ from mcp.client.streamable_http import streamable_http_client
 TOOL_FIELDS = {
     "search": {"query": "string", "max_results": "integer"},
     "fetch_content": {"url": "string"},
+    "search_images": {"query": "string"},
 }
 
 
@@ -291,7 +292,7 @@ class WebTools:
                             pin = hashlib.sha256(json.dumps(schemas, sort_keys=True).encode()).hexdigest()
                             if set(tools) != set(TOOL_FIELDS):
                                 raise ToolError("schema mismatch")
-                            pinned = self.store.meta("mcp_web_schema_usb_search_fetch_v2")
+                            pinned = self.store.meta("mcp_web_schema_usb_search_fetch_images_v3")
                             if pinned and pin != pinned:
                                 raise ToolError("schema mismatch")
                 result = {
@@ -312,7 +313,7 @@ class WebTools:
             raise ToolError("เครื่องมือเว็บยังไม่ได้เปิดใช้ครับ")
         if time.monotonic() < self.pause_until:
             raise ToolError("เครื่องมือเว็บพักชั่วคราวครับ ลองใหม่อีกสักครู่")
-        if name in {"search", "rss_news"}:
+        if name in {"search", "rss_news", "search_images"}:
             if set(arguments) != {"query"} or not isinstance(arguments["query"], str):
                 raise ToolError("คำค้นไม่ถูกต้องครับ")
             arguments = {"query": explicit_query(arguments["query"])}
@@ -359,7 +360,7 @@ class WebTools:
                                 or set(schema.get("properties", {})) != set(expected[tool])
                                 or schema.get("type") != "object"
                                 or schema.get("required")
-                                != (["query"] if tool in {"search", "rss_news"} else ["url"])
+                                != (["query"] if tool in {"search", "rss_news", "search_images"} else ["url"])
                                 or any(
                                     schema["properties"][field].get("type") != expected[tool][field]
                                     for field in expected[tool]
@@ -367,11 +368,11 @@ class WebTools:
                             ):
                                 raise ToolError("schema เครื่องมือไม่ตรงกับแบบที่อนุญาตครับ")
                         fingerprint = hashlib.sha256(json.dumps(schemas, sort_keys=True).encode()).hexdigest()
-                        pinned = self.store.meta("mcp_web_schema_usb_search_fetch_v2")
+                        pinned = self.store.meta("mcp_web_schema_usb_search_fetch_images_v3")
                         if pinned and pinned != fingerprint:
                             raise ToolError("schema เครื่องมือเปลี่ยน ต้องให้ผู้ดูแลตรวจครับ")
                         if not pinned:
-                            self.store.set_meta("mcp_web_schema_usb_search_fetch_v2", fingerprint)
+                            self.store.set_meta("mcp_web_schema_usb_search_fetch_images_v3", fingerprint)
                         # Low-level one-shot call avoids SDK auto-retry/relist on schema mismatch.
                         result = await client.session.call_tool(
                             name, arguments, read_timeout_seconds=read_timeout
@@ -404,7 +405,7 @@ class WebTools:
                                 WebPage(
                                     page["title"][:200],
                                     checked_url(page["url"]),
-                                    page["text"].encode()[:4096].decode(errors="ignore"),
+                                    checked_url(page["text"]) if name == "search_images" else page["text"].encode()[:4096].decode(errors="ignore"),
                                     str(data.get("fetched_at", ""))[:40],
                                 )
                             )

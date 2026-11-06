@@ -81,10 +81,11 @@ class FootballAppTests(unittest.IsolatedAsyncioTestCase):
                     "now",
                 )
             ],
+            ToolError("browser unavailable"),
         ]
         await self.bot.process(self.job())
         calls = self.bot.web.call.call_args_list
-        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(calls), 3)
         self.assertEqual(calls[0].args[0], "search")
         self.assertIn("site:manutd.com", calls[0].args[1]["query"])
         self.bot.history.hydrate.assert_not_awaited()
@@ -111,10 +112,10 @@ class FootballAppTests(unittest.IsolatedAsyncioTestCase):
             ToolError("browser unavailable"),
         ]
         await self.bot.process(self.job())
-        self.assertEqual(self.bot.web.call.await_count, 1)
+        self.assertEqual(self.bot.web.call.await_count, 2)
         messages = str(self.bot.provider.chat.call_args)
         self.assertIn("Search snippet", messages)
-        self.assertIn("Never call snippets", messages)
+        self.assertIn("search snippet", messages.lower())
         self.assertNotIn("browser unavailable", messages)
 
     async def test_revision_change_blocks_second_call(self):

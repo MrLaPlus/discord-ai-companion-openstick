@@ -254,7 +254,7 @@ class SearchUpgradeTests(unittest.IsolatedAsyncioTestCase):
         self.bot.store.set_meta("news:10:20", {"feeds": ["https://example.com/rss"]})
         self.message.content = "ข่าวล่าสุด"
         await self.bot.process(self.job())
-        self.assertEqual(self.bot.web.call.call_args.args[0], "search")
+        self.assertEqual(self.bot.web.call.call_args_list[0].args[0], "search")
         self.assertNotIn("example.com/rss", str(self.bot.web.call.call_args))
 
     async def test_tool_disabled_by_role_never_executes(self):
@@ -320,7 +320,7 @@ class SearchUpgradeTests(unittest.IsolatedAsyncioTestCase):
         self.bot.store.set_meta("tools:10:20:browser_read", {"enabled": False})
         await self.bot.process(self.job())
         self.assertFalse(self.bot.store.meta("tools:10:20:browser_read")["enabled"])
-        self.assertEqual([c.args[0] for c in self.bot.web.call.call_args_list], ["search"])
+        self.assertEqual([c.args[0] for c in self.bot.web.call.call_args_list], ["search", "fetch_content"])
         self.assertIn("untrusted", str(self.bot.provider.chat.call_args))
 
     async def test_plain_privacy_request_does_not_call_model(self):

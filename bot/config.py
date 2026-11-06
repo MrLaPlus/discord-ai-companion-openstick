@@ -21,6 +21,8 @@ def number(name: str, default: int, minimum: int, maximum: int) -> int:
 class Config:
     discord_token: str = field(repr=False)
     api_key: str = field(repr=False)
+    openrouter_key: str = field(default='', repr=False)
+    tokenme_key: str = field(default='', repr=False)
     base_url: str = "https://api.groq.com/openai/v1"
     model: str = "qwen/qwen3.8-27b"
     guild_id: int | None = None
@@ -111,6 +113,8 @@ class Config:
         config = cls(
             discord_token=token,
             api_key=key,
+            openrouter_key=os.environ.get('OPENROUTER_API_KEY', '').strip(),
+            tokenme_key=os.environ.get('TOKENME_API_KEY', '').strip(),
             base_url=base,
             model=os.environ.get("GROQ_MODEL", cls.model),
             guild_id=int(guild) if guild else None,

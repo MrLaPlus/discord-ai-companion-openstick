@@ -188,11 +188,11 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         self.bot.history.hydrate = AsyncMock()
         self.bot.store.put_message(2, 10, 20, 30, "PRIVATE_OLD_ANIME", time.time())
         await self.bot.process(self.job())
-        self.assertEqual(self.bot.web.call.await_count, 1)
+        self.assertEqual(self.bot.web.call.await_count, 2)
         self.assertIn("Manchester United", self.bot.web.call.call_args_list[0].args[1]["query"])
         self.bot.history.hydrate.assert_not_awaited()
         self.assertNotIn("PRIVATE_OLD_ANIME", str(self.bot.provider.chat.call_args))
-        self.assertNotIn("W1", self.message.reply.call_args.args[0])
+        self.assertIn("https://example.com/match", self.message.reply.call_args.args[0])
         self.assertTrue(self.bot.web.saved_sources(scope(self.message), 880))
 
     async def test_private_derived_query_requires_modal_no_egress(self):
@@ -203,6 +203,80 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         self.bot.provider.chat.assert_not_awaited()
         view = self.message.reply.call_args.kwargs["view"]
         self.assertEqual(view.query, "")
+
+    async def test_report_delivers_txt_file_with_access_checks(self):
+        self.enable()
+        self.message.content = '/report txt ข่าว AI'
+        self.bot.web.call.return_value = [WebPage('source', 'https://example.com/story', 'facts', 'now')]
+        self.bot.provider.chat.return_value = Answer('สรุป [W1]', 10)
+        await self.bot.process(self.job())
+        file = self.message.reply.await_args.kwargs['file']
+        self.assertEqual(file.filename, 'report.txt')
+        self.assertIn('https://example.com/story', file.fp.getvalue().decode('utf-8'))
+        self.assertEqual([c.args[0] for c in self.bot.web.call.await_args_list], ['search', 'fetch_content'])
+
+    async def test_report_button_mode_does_not_access_web(self):
+        self.enable()
+        self.message.content = '/report md AI'
+        self.bot.store.set_meta('mcp:10:20', 'button')
+        await self.bot.process(self.job())
+        self.bot.web.call.assert_not_awaited()
+        self.bot.provider.chat.assert_not_awaited()
+
+    async def test_fact_check_respects_button_mode_and_never_interjects(self):
+        self.enable()
+        self.message.content = 'เช็กข่าว โลกกลม'
+        self.bot.store.set_meta('mcp:10:20', 'button')
+        await self.bot.process(self.job())
+        self.bot.web.call.assert_not_awaited()
+        self.assertIn('ยืนยันคำค้น', self.message.reply.await_args.args[0])
+        self.bot.store.set_meta('mcp:10:20', 'hybrid')
+        job = self.job()
+        job.reason = 'interject'
+        await self.bot.process(job)
+        self.bot.web.call.assert_not_awaited()
+
+    async def test_fact_check_respects_search_permission(self):
+        self.enable()
+        self.message.content = 'เช็กข่าว โลกกลม'
+        self.bot.web.call.return_value = [WebPage('source', 'https://example.com/story', 'facts', 'now')]
+        await self.bot.process(self.job())
+        self.assertEqual([call.args[0] for call in self.bot.web.call.await_args_list], ['search', 'fetch_content'])
+        self.assertIn('https://example.com/story', self.message.reply.await_args.args[0])
+        self.bot.web.call.reset_mock()
+        self.bot.store.set_meta('tools:10:20:search', {'enabled': False})
+        await self.bot.process(self.job())
+        self.bot.web.call.assert_not_awaited()
+        self.assertIn('ไม่มีสิทธิ์', self.message.reply.await_args.args[0])
+
+    async def test_image_search_respects_search_role_and_sends_result(self):
+        self.enable()
+        self.message.content = 'ค้นหารูป ริมุรุสิเอามาสักรูป'
+        self.bot.web.call.return_value = [WebPage('rimuru', 'https://example.com/source', 'https://example.com/pic.jpg', 'now')]
+        await self.bot.process(self.job())
+        self.assertEqual(self.bot.web.call.await_args.args[0], 'search_images')
+        self.assertIn('https://example.com/pic.jpg', self.message.reply.await_args.args[0])
+        self.assertIn('https://example.com/source', self.message.reply.await_args.args[0])
+        self.bot.provider.chat.assert_not_awaited()
+        self.bot.web.call.reset_mock()
+        self.bot.store.set_meta('tools:10:20:search', {'enabled': False})
+        await self.bot.process(self.job())
+        self.bot.web.call.assert_not_awaited()
+
+    async def test_progress_enabled_by_default_and_toggle_off(self):
+        self.enable()
+        await self.bot.process(self.job())
+        self.assertIn('กำลังค้น', self.channel.send.await_args.args[0])
+        self.channel.send.reset_mock()
+        self.bot.store.set_user(10, 30, progress_enabled=0)
+        await self.bot.process(self.job())
+        self.channel.send.assert_not_awaited()
+
+    async def test_synthesis_failure_reports_stage(self):
+        self.enable()
+        self.bot.provider.chat.side_effect = ProviderError('not available')
+        await self.bot.process(self.job())
+        self.assertIn('ได้ข้อมูลจากเว็บแล้ว', self.message.reply.await_args.args[0])
 
     async def test_search_failure_does_not_call_ai_or_invent_score(self):
         self.enable()
@@ -381,7 +455,7 @@ class WebTransportTests(unittest.IsolatedAsyncioTestCase):
             web = WebTools(Config("fake", "fake", mcp_enabled=True), store)
             with patch("bot.web_tools.Client", return_value=manager):
                 self.assertEqual((await web.check_health())["status"], "unverified")
-            self.assertIsNone(store.meta("mcp_web_schema_usb_search_fetch_v2"))
+            self.assertIsNone(store.meta("mcp_web_schema_usb_search_fetch_images_v3"))
             store.close()
 
     async def test_schema_drift_blocks_execution_and_circuit_breaks(self):
@@ -394,7 +468,7 @@ class WebTransportTests(unittest.IsolatedAsyncioTestCase):
                     input_schema={
                         "type": "object",
                         "properties": {k: {"type": v} for k, v in fields.items()},
-                        "required": ["query" if name in {"search", "rss_news"} else "url"],
+                        "required": ["query" if name in {"search", "rss_news", "search_images"} else "url"],
                     },
                 )
                 for name, fields in TOOL_FIELDS.items()
@@ -408,7 +482,7 @@ class WebTransportTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as folder:
             store = Store(Path(folder) / "db")
             web = WebTools(Config("fake", "fake", mcp_enabled=True), store)
-            store.set_meta("mcp_web_schema_usb_search_fetch_v2", "reviewed-old-schema")
+            store.set_meta("mcp_web_schema_usb_search_fetch_images_v3", "reviewed-old-schema")
             with patch("bot.web_tools.Client", return_value=manager):
                 for _ in range(3):
                     with self.assertRaises(ToolError):

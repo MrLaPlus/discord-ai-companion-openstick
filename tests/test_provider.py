@@ -77,6 +77,20 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["max_completion_tokens"], 768)
         self.assertFalse(session.calls[0][1]["allow_redirects"])
 
+    async def test_image_payload_is_bounded_and_reserves_image_tokens(self):
+        session = Session()
+        messages = [{"role": "user", "content": "what"}]
+        await Provider(self.config, self.quota, session).chat(messages, image_bytes=b"\xff\xd8\xffabc")
+        content = session.calls[0][1]["json"]["messages"][0]["content"]
+        self.assertEqual(content[0]["text"], "what")
+        self.assertTrue(content[1]["image_url"]["url"].startswith("data:image/jpeg;base64,"))
+        self.assertEqual(messages[0]["content"], "what")
+        reserved = self.store.db.execute("SELECT reserved FROM attempts ORDER BY id DESC LIMIT 1").fetchone()[0]
+        self.assertGreaterEqual(reserved, 2048 + self.config.output_tokens)
+        with self.assertRaises(ProviderError):
+            await Provider(self.config, self.quota, session).chat(messages, image_bytes=b"not jpeg")
+        self.assertEqual(len(session.calls), 1)
+
     async def test_reasoning_only_completion_is_rejected_and_usage_is_still_counted(self):
         data = {
             "choices": [

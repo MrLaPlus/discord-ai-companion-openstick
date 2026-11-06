@@ -78,6 +78,10 @@ class Companion(discord.Client):
         self.control_views: set[discord.ui.View] = set()
         self.operations = Operations(self)
         self.operations_task: asyncio.Task | None = None
+        self.telegram_task: asyncio.Task | None = None
+        self.telegram = None
+        self.scheduler_task: asyncio.Task | None = None
+        self.scheduler = None
         self.dashboard_runner = None
         self.suggestion_views: set[MemorySuggestion] = set()
         self.suggestion_times: dict[tuple[int, int], float] = {}
@@ -109,6 +113,16 @@ class Companion(discord.Client):
         ]
         self.background = asyncio.create_task(self.heartbeat(), name="heartbeat")
         self.operations_task = asyncio.create_task(self.operations.run(), name="operations")
+        from .telegram import Telegram, settings as telegram_settings
+
+        telegram_config = telegram_settings()
+        if telegram_config:
+            self.telegram = Telegram(self, *telegram_config)
+            self.telegram_task = asyncio.create_task(self.telegram.run(), name="telegram")
+        from .schedule import Scheduler
+
+        self.scheduler = Scheduler(self)
+        self.scheduler_task = asyncio.create_task(self.scheduler.run(), name="scheduler")
         from .dashboard import start_dashboard
 
         self.dashboard_runner = await start_dashboard(self)
@@ -474,6 +488,15 @@ class Companion(discord.Client):
             return await operation()
 
     async def process(self, job: Job):
+        from .provider import model_choice, user_model
+        key = f'tokenme:model:discord:{job.message.guild.id}:{job.message.author.id}'
+        token = model_choice.set(user_model(self.store, key))
+        try:
+            return await self._process(job)
+        finally:
+            model_choice.reset(token)
+
+    async def _process(self, job: Job):
         message = job.message
         if job.revision != self.revision:
             await self.cancel_job(job, "cancelled: state changed")
@@ -517,6 +540,200 @@ class Companion(discord.Client):
             source = await timing.awaited("discord_message_fetch", destination.fetch_message(origin.id))
             if source.content != origin.content or job.revision != self.revision:
                 await self.cancel_job(job, "cancelled: button source changed")
+                return
+        from .board_status import is_board_question, board_assessment
+        if is_board_question(job.question):
+            if not getattr(getattr(requester, 'guild_permissions', None), 'manage_guild', False):
+                await self.deliver(job, current, "สถานะบอร์ดดูได้เฉพาะแอดมินครับ", {}, allowed, tone)
+                return
+            assessment = await board_assessment()
+            fresh = await self.access_snapshot(message)
+            if fresh is None or job.revision != self.revision or not getattr(getattr(fresh[1], 'guild_permissions', None), 'manage_guild', False):
+                await self.cancel_job(job, "cancelled: access changed")
+                return
+            try:
+                await fresh[1].send(assessment, allowed_mentions=discord.AllowedMentions.none())
+                notice = "ส่งสถานะบอร์ดทางข้อความส่วนตัวแล้วครับ"
+            except discord.HTTPException:
+                notice = "ส่งข้อความส่วนตัวไม่ได้ครับ ใช้ /status เพื่อดูแบบส่วนตัวได้"
+            await self.deliver(job, current, notice, {}, allowed, tone)
+            return
+        from .capabilities import capability_question, capability_text, schedule_is_ready
+        if capability_question(job.question):
+            text = capability_text(
+                "discord", web_enabled=self.tool_allowed(message, "search", requester),
+                fetch_enabled=self.tool_allowed(message, "fetch_content", requester),
+                storage_allowed=not self.store.user(message.guild.id, requester.id)["optout"],
+                memory_enabled=bool(self.settings(message.guild.id, destination.id)["readable"]),
+                scheduler_ready=schedule_is_ready(self),
+            )
+            await self.deliver(job, current, text, {}, allowed, tone)
+            return
+        if job.question.strip() in {'/tasks', 'วันนี้มีงานอะไรบ้าง', 'มีงานอะไรบ้าง', 'ดูงานทั้งหมด'}:
+            from .task_overview import task_overview
+            text = task_overview(self.store, 'discord', message.guild.id, destination.id, requester.id, self.config.timezone)
+            await self.deliver(job, current, text, {}, allowed, tone)
+            return
+        if job.question.startswith('/github_release '):
+            from .github_public import latest_release
+            if job.reason == 'interject':
+                await self.cancel_job(job, 'GitHub lookup requires an explicit user request')
+                return
+            if not self.tool_allowed(message, 'search', requester) or self.web_mode(message.guild.id, message.channel.id) == 'button':
+                await self.deliver(job, current, 'ห้องนี้ยังไม่อนุญาตให้ค้นข้อมูล GitHub อัตโนมัติครับ', {}, allowed, tone)
+                return
+            fresh = await self.access_snapshot(message)
+            if fresh is None or job.revision != self.revision or not self.tool_allowed(message, 'search', fresh[1]):
+                await self.cancel_job(job, 'cancelled before GitHub search')
+                return
+            try:
+                self.web.reserve(message.guild.id, requester.id, 'search')
+                job.used_tools.add('search')
+                reply = await latest_release(self.session, job.question[len('/github_release '):])
+            except (ValueError, ToolError) as error:
+                reply = str(error)
+            await self.deliver(job, current, reply, {}, allowed, tone)
+            return
+        from .report_workflow import parse_report, build_report
+        try:
+            report = parse_report(job.question)
+        except ValueError as error:
+            await self.deliver(job, current, str(error), {}, allowed, tone)
+            return
+        if report is not None:
+            if job.reason == 'interject':
+                await self.cancel_job(job, 'report requires an explicit user request')
+                return
+            if not self.tool_allowed(message, 'search', requester) or self.web_mode(message.guild.id, message.channel.id) == 'button':
+                await self.deliver(job, current, 'ห้องนี้ยังไม่อนุญาตให้ค้นเพื่อทำรายงานอัตโนมัติครับ', {}, allowed, tone)
+                return
+            if self.store.user(message.guild.id, requester.id)['progress_enabled']:
+                if getattr(message, 'private', False) or getattr(message, 'status_private', False):
+                    await self.private_status(message, 'กำลังค้นและทำรายงานครับ')
+                else:
+                    try:
+                        await current.channel.send('กำลังค้นและทำรายงานครับ', allowed_mentions=discord.AllowedMentions.none())
+                    except discord.HTTPException:
+                        pass
+            async def report_tool(name, value):
+                fresh = await self.access_snapshot(message)
+                if fresh is None or job.revision != self.revision or not self.tool_allowed(message, name, fresh[1]):
+                    raise ToolError('สิทธิ์ใช้เครื่องมือเปลี่ยนแล้วครับ')
+                job.used_tools.add(name)
+                return await self.web.call(name, {'query' if name == 'search' else 'url': value}, guild=message.guild.id, user=requester.id)
+            async def report_model(messages):
+                fresh = await self.access_snapshot(message)
+                if fresh is None or job.revision != self.revision or any(not self.tool_allowed(message, name, fresh[1]) for name in job.used_tools):
+                    raise StaleRequest
+                return await self.quota_retry(job, lambda: self.provider.chat(messages), tone=tone)
+            try:
+                content = await build_report(report[1], tool=report_tool, model=report_model)
+                data = content.encode('utf-8')
+                if len(data) > 131072:
+                    raise ValueError('report too large')
+                fresh = await self.access_snapshot(message)
+                if fresh is None or job.revision != self.revision or not set(allowed) <= set(fresh[2]) or tone != fresh[3] or any(not self.tool_allowed(message, name, fresh[1]) for name in job.used_tools):
+                    await self.cancel_job(job, 'cancelled before report delivery')
+                    return
+                import io
+                await current.reply('รายงานพร้อมแล้วครับ', file=discord.File(io.BytesIO(data), filename='report.' + report[0]), mention_author=False, allowed_mentions=discord.AllowedMentions.none())
+                self.store.finish(message.id, 'sent')
+                await self.private_status(message, 'ส่งรายงานแล้วครับ')
+            except ProviderError as error:
+                await self.deliver(job, current, 'สร้างรายงานไม่สำเร็จ: ' + str(error), {}, allowed, tone)
+            except (ValueError, ToolError, QuotaExceeded):
+                await self.deliver(job, current, 'ค้นหรือสร้างรายงานไม่สำเร็จครับ ลองใหม่ภายหลัง', {}, allowed, tone)
+            return
+        from .fact_check import fact_check, fact_check_input
+        claim = fact_check_input(job.question)
+        if claim is not None:
+            if job.reason == 'interject' or job.catchup_since is not None:
+                await self.cancel_job(job, 'fact check requires an explicit user request')
+                return
+            if self.web_mode(message.guild.id, message.channel.id) == 'button':
+                await self.deliver(job, current, 'ห้องนี้ตั้งให้ยืนยันคำค้นก่อน จึงยังใช้การตรวจข่าวอัตโนมัติไม่ได้ครับ ให้แอดมินพิจารณาโหมดค้นเว็บของห้อง', {}, allowed, tone)
+                return
+            if not self.tool_allowed(message, 'search', requester):
+                await self.deliver(job, current, 'ห้องนี้ยังไม่เปิดค้นเว็บหรือคุณไม่มีสิทธิ์ตรวจข่าวครับ', {}, allowed, tone)
+                return
+            if claim and self.store.user(message.guild.id, requester.id)['progress_enabled']:
+                try:
+                    if getattr(message, 'private', False) or getattr(message, 'status_private', False):
+                        await self.private_status(message, 'กำลังตรวจข้อกล่าวอ้างและค้นแหล่งข้อมูลครับ')
+                    else:
+                        await current.channel.send('กำลังตรวจข้อกล่าวอ้างและค้นแหล่งข้อมูลครับ', allowed_mentions=discord.AllowedMentions.none())
+                except discord.HTTPException:
+                    pass
+            async def fact_tool(name, value):
+                fresh = await self.access_snapshot(message)
+                if fresh is None or job.revision != self.revision or not self.tool_allowed(message, name, fresh[1]):
+                    raise ToolError('สิทธิ์ใช้เครื่องมือเปลี่ยนแล้วครับ')
+                job.used_tools.add(name)
+                return await self.web.call(name, {'query' if name == 'search' else 'url': value}, guild=message.guild.id, user=requester.id)
+            async def fact_model(messages):
+                fresh = await self.access_snapshot(message)
+                if fresh is None or job.revision != self.revision or any(not self.tool_allowed(message, name, fresh[1]) for name in job.used_tools):
+                    raise StaleRequest
+                return await self.quota_retry(job, lambda: self.provider.chat(messages), tone=tone)
+            try:
+                reply = await fact_check(claim, tool=fact_tool, model=fact_model)
+            except ProviderError as error:
+                await self.deliver(job, current, 'ตรวจข่าวไม่สำเร็จ: ' + str(error), {}, allowed, tone)
+            except (ToolError, QuotaExceeded):
+                reply = 'ตรวจข่าวไม่สำเร็จหรือโควตาไม่พอ จึงยังสรุปว่าจริงหรือเท็จไม่ได้ครับ'
+            await self.deliver(job, current, reply, {}, allowed, tone)
+            return
+        from .image_search import image_query
+        try:
+            image_term = image_query(job.question)
+        except ToolError as error:
+            await self.deliver(job, current, str(error), {}, allowed, tone)
+            return
+        if image_term is not None:
+            if not self.tool_allowed(message, 'search', requester):
+                await self.deliver(job, current, "ห้องนี้ยังไม่เปิดค้นเว็บหรือคุณไม่มีสิทธิ์ค้นรูปครับ", {}, allowed, tone)
+                return
+            job.used_tools.add('search')
+            if self.store.user(message.guild.id, requester.id)['progress_enabled']:
+                if getattr(message, 'private', False) or getattr(message, 'status_private', False):
+                    await self.private_status(message, 'กำลังค้นรูปครับ')
+                else:
+                    try:
+                        await current.channel.send('กำลังค้นรูปครับ', allowed_mentions=discord.AllowedMentions.none())
+                    except discord.HTTPException:
+                        pass
+            fresh = await self.access_snapshot(message)
+            if fresh is None or job.revision != self.revision or not self.tool_allowed(message, 'search', fresh[1]):
+                await self.cancel_job(job, 'cancelled before image search')
+                return
+            try:
+                pages = await self.web.call('search_images', {'query': image_term}, guild=message.guild.id, user=requester.id)
+            except ToolError:
+                await self.deliver(job, current, 'ค้นรูปไม่สำเร็จครับ ลองใหม่ภายหลัง', {}, allowed, tone)
+                return
+            text = (pages[0].text + "\nแหล่งรูป: <" + pages[0].url + ">") if pages else 'ยังไม่พบรูปที่ใช้ได้ครับ ลองระบุคำค้นใหม่'
+            await self.deliver(job, current, text, {}, allowed, tone)
+            return
+        from .schedule_edit import is_schedule_edit, edit_reply
+        if is_schedule_edit(job.question):
+            if getattr(message, "private", False):
+                await self.deliver(job, current, "แก้รายการในห้องที่ตั้งไว้ได้ครับ", {}, allowed, tone)
+                return
+            reply_text = edit_reply(self.store, "discord", message.guild.id, destination.id, requester.id, job.question, self.config.timezone)
+            await self.deliver(job, current, reply_text, {}, allowed, tone)
+            return
+        from .schedule import is_clock_question, is_scheduling_request, request_reply
+        schedule_command = is_scheduling_request(job.question)
+        if schedule_command and getattr(message, "private", False):
+            await self.deliver(job, current, "ตั้งเวลาในห้องด้วย /schedule ได้ครับ ข้อความแจ้งเตือนจะส่งในห้องนั้น", {}, allowed, tone)
+            return
+        if schedule_command and ("รายงานข่าว" in job.question or "ส่งข่าว" in job.question) and not self.tool_allowed(message, "search", requester):
+            await self.deliver(job, current, "ห้องนี้ยังไม่เปิดค้นเว็บหรือคุณไม่มีสิทธิ์ จึงตั้งรายงานข่าวไม่ได้ครับ", {}, allowed, tone)
+            return
+        if schedule_command or is_clock_question(job.question) or job.question.strip() in {"/schedules", "รายการเตือน", "รายการตั้งเวลา"} or re.match(r"^(?:/cancel|ยกเลิกเตือน)\s+", job.question.strip()):
+            reply_text = request_reply(self.store, "discord", message.guild.id, destination.id, requester.id, job.question, self.config.timezone)
+            if reply_text is not None:
+                await self.deliver(job, current, reply_text, {}, allowed, tone)
                 return
         turns = (
             self.conversation.get(scope(message), allowed)
@@ -604,11 +821,12 @@ class Companion(discord.Client):
             job.question,
             re.I,
         ):
-            text = (
-                f"มีค้นเว็บผ่าน Tavily และ DuckDuckGo สำรอง พร้อมอ่านหน้าเว็บ HTTPS สาธารณะได้ครั้งละหนึ่งลิงก์ครับ สถานะครั้งล่าสุด: {self.web.last_status} "
-                "หน้าเว็บที่ต้องล็อกอินหรือใช้ JavaScript และคลิปวิดีโออาจอ่านไม่ได้"
-                if self.web_allowed(message)
-                else "มีส่วนเชื่อมเครื่องมือเว็บแล้ว แต่ยังปิดในห้องนี้ครับ ให้แอดมินเปิดด้วย /mcp channel ได้"
+            text = capability_text(
+                "discord", web_enabled=self.tool_allowed(message, "search", requester),
+                fetch_enabled=self.tool_allowed(message, "fetch_content", requester),
+                storage_allowed=not self.store.user(message.guild.id, requester.id)["optout"],
+                memory_enabled=bool(self.settings(message.guild.id, destination.id)["readable"]),
+                scheduler_ready=schedule_is_ready(self),
             )
             await self.deliver(job, current, text, {}, allowed, tone)
             return
@@ -721,7 +939,10 @@ class Companion(discord.Client):
             channel_names={c.id: c.name for c in available if c.id in allowed},
             dialogue=dialogue,
             repair=repaired is not None,
-            web_enabled=self.web_allowed(message),
+            web_enabled=self.tool_allowed(message, "search", requester) or self.tool_allowed(message, "fetch_content", requester),
+            web_search_enabled=self.tool_allowed(message, "search", requester),
+            web_fetch_enabled=self.tool_allowed(message, "fetch_content", requester),
+            scheduler_ready=schedule_is_ready(self),
             scene=self.room_activity.scene(message.guild.id, destination.id)
             if job.reason == "interject"
             else None,
@@ -755,6 +976,8 @@ class Companion(discord.Client):
             return
         provenance = used_sources(answer.text, context.sources) or context.sources
         text = format_answer(answer.text, context.sources, wants_sources(job.question))
+        if getattr(answer, 'notice', ''):
+            text += '\n\n' + answer.notice
         if job.catchup_since is not None:
             text = catchup_heading(job.catchup_since, self.config.timezone) + "\n\n" + text
         if answer.truncated:
@@ -885,6 +1108,18 @@ class Companion(discord.Client):
                 user=message.author.id,
             )
 
+        if not self.tool_allowed(message, action, snapshot[1]):
+            raise ToolError("เครื่องมือนี้ปิดอยู่ หรือสิทธิ์เปลี่ยนแล้วครับ")
+        # Progress carries no query or source data and does not mark the job as delivered.
+        progress_text = "กำลังค้นข้อมูลและอ่านแหล่งที่มาครับ" if action == "search" else "กำลังอ่านลิงก์ครับ"
+        if self.store.user(message.guild.id, message.author.id)["progress_enabled"]:
+            try:
+                if getattr(message, "private", False) is True or getattr(message, "status_private", False) is True:
+                    await self.private_status(message, progress_text)
+                else:
+                    await current.channel.send(progress_text, allowed_mentions=discord.AllowedMentions.none())
+            except discord.HTTPException:
+                pass
         pages = await call_tool(action, value)
         if action == "fetch_content" and pages and not any(p.text.strip() for p in pages):
             raise ToolError("อ่านลิงก์แล้วไม่พบข้อความที่นำมาสรุปได้ครับ เว็บอาจต้องใช้ JavaScript หรือเข้าสู่ระบบ")
@@ -904,11 +1139,8 @@ class Companion(discord.Client):
         if action == "search":
             if football_request(question):
                 pages.sort(key=lambda page: host_rank(page.url, question))
-            # Search results are snippets, never evidence that a full page was read.
-            pages = [
-                replace(page, text="Search snippet (not a full page or live feed): " + page.text)
-                for page in pages
-            ]
+            from .research import read_search_results
+            pages = await read_search_results(pages, lambda url: call_tool("fetch_content", url))
         if job.revision != self.revision:
             await self.cancel_job(job, "cancelled during web")
             return True
@@ -925,7 +1157,7 @@ class Companion(discord.Client):
             tone=tone,
             web_pages=pages,
             web_enabled=True,
-            web_kind="page" if action == "fetch_content" else "search",
+            web_kind="page" if action == "fetch_content" else "mixed",
         )
         if not context.web_sources:
             raise ToolError("พื้นที่บริบทเหลือไม่พอให้อ่านผลเว็บครับ ลองใหม่ภายหลังได้")
@@ -941,25 +1173,38 @@ class Companion(discord.Client):
         ):
             await self.cancel_job(job, "cancelled before synthesis")
             return True
-        async with current.channel.typing():
-            answer = await self.quota_retry(
-                job, lambda: self.provider.chat(context.messages), context=context, tone=tone
-            )
+        try:
+            async with current.channel.typing():
+                answer = await self.quota_retry(
+                    job, lambda: self.provider.chat(context.messages), context=context, tone=tone
+                )
+        except ProviderError as error:
+            await self.deliver(job, current, 'ได้ข้อมูลจากเว็บแล้ว แต่สรุปไม่สำเร็จ: ' + str(error), {}, allowed, tone)
+            return True
+        except QuotaExceeded:
+            await self.deliver(job, current, "ได้ข้อมูลจากเว็บแล้ว แต่สรุปไม่สำเร็จครับ ลองใหม่ภายหลัง", {}, allowed, tone)
+            return True
         if not await self.verify_sources(message.guild, context.sources, context.fingerprints):
             await self.cancel_job(job, "cancelled combined sources")
             return True
         text = format_answer(
             answer.text,
             context.sources,
-            action == "fetch_content" or wants_sources(job.question),
+            action in {"search", "fetch_content"} or wants_sources(job.question),
             web_sources=context.web_sources,
         )
+        if getattr(answer, 'notice', ''):
+            text += '\n\n' + answer.notice
         if (
             action == "fetch_content"
             and context.web_sources
             and not any(url in text for url in context.web_sources.values())
         ):
             text += "\n\nแหล่งข้อมูล: <" + next(iter(context.web_sources.values())) + ">"
+        if action == "search":
+            from .research import evidence_kind
+            if any(evidence_kind(page) == "search snippet" for page in pages):
+                text += "\n\nบางแหล่งอ่านหน้าเว็บไม่ได้ จึงใช้ข้อความสั้นจากผลค้นหาแทนครับ"
         if answer.truncated:
             text += "\n\nคำตอบรอบนี้อาจยังไม่ครบ พิมพ์ ‘ต่อ’ ให้ต่อได้ครับ"
         delivered = await self.deliver(
@@ -1288,6 +1533,10 @@ class Companion(discord.Client):
         tasks = [*self.workers, *([self.background] if self.background else [])]
         if self.operations_task:
             tasks.append(self.operations_task)
+        if self.telegram_task:
+            tasks.append(self.telegram_task)
+        if self.scheduler_task:
+            tasks.append(self.scheduler_task)
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)

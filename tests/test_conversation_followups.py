@@ -36,6 +36,7 @@ class FollowupUnitTests(unittest.TestCase):
             catchup_start("วันนี้พลาดอะไร", "Asia/Bangkok", now), now.replace(hour=0, minute=0).timestamp()
         )
         self.assertEqual(catchup_start("พลาดอะไร 2 ชั่วโมง", "Asia/Bangkok", now), now.timestamp() - 7200)
+        self.assertEqual(catchup_start("สรุปห้องนี้วันนี้", "Asia/Bangkok", now), now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
         self.assertIsNone(catchup_start("คุยเล่นกัน", "Asia/Bangkok", now))
         with self.assertRaises(ValueError):
             catchup_start("พลาดอะไร 999 ชั่วโมง", "Asia/Bangkok", now)

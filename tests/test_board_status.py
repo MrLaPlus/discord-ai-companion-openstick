@@ -59,6 +59,27 @@ class BoardMetricTests(unittest.TestCase):
             self.assertIn("เวลาเปิดเครื่อง: ไม่พร้อมใช้งาน", text)
 
 
+class BoardAssessmentTests(unittest.IsolatedAsyncioTestCase):
+    async def test_service_fallback_only_reports_process_evidence(self):
+        from bot.board_status import _service_state
+        proc = SimpleNamespace(communicate=AsyncMock(return_value=(b'', b'')))
+        with patch('bot.board_status.asyncio.create_subprocess_exec', new=AsyncMock(return_value=proc)), patch('bot.board_status._read', return_value='42\n'):
+            self.assertIn('มีโปรเซส', await _service_state('discord-usb-search.service'))
+        with patch('bot.board_status.asyncio.create_subprocess_exec', new=AsyncMock(return_value=proc)), patch('bot.board_status._read', return_value=None):
+            self.assertEqual(await _service_state('discord-usb-search.service'), 'ไม่ทราบ')
+
+    async def test_warnings_and_unknown_services_reflect_measurements(self):
+        from bot.board_status import board_assessment, is_board_question
+        data = {'disk': {'total': 100, 'used': 90, 'available': 10}, 'ram': {'total': 100, 'used': 99, 'available': 1}, 'temperatures_c': {'cpu': 81}}
+        with patch('bot.board_status.board_status', new=AsyncMock(return_value=data)), patch('bot.board_status._service_state', new=AsyncMock(side_effect=['ทำงาน', 'ไม่ทราบ'])):
+            result = await board_assessment()
+        self.assertIn('85%', result)
+        self.assertIn('80°C', result)
+        self.assertIn('ไม่ทราบ', result)
+        self.assertTrue(is_board_question('บอร์ดเป็นไงบ้าง'))
+        self.assertFalse(is_board_question('ช่วยอธิบายว่าบอร์ดเป็นไงบ้างในบทความ'))
+
+
 class StatusCommandTests(unittest.IsolatedAsyncioTestCase):
     asyncSetUp = fixtures.AppTests.asyncSetUp
     asyncTearDown = fixtures.AppTests.asyncTearDown
